@@ -35,4 +35,4 @@ slideguard = ["resources/*.ps1", "schemas/*.json"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
-addopts = "--basetemp=.tmp/pytest"
+addopts = "--basetemp=.pytest-tmp"

@@ -85,3 +85,11 @@ Symptoms: QA passes, but copying a few long-named evidence files reports `WinErr
 Cause: the final path exceeds the legacy Win32 `MAX_PATH` boundary even though PowerPoint export already used a short scratch path.
 
 Fix: use a short atomic staging name and Win32 extended-length paths for publication, existence checks and checksum reads. Do not shorten or silently omit evidence filenames.
+
+## 12. Tests pass locally but fail on a clean GitHub runner
+
+Symptoms: tests using pytest's `tmp_path` fail before setup because `.tmp/pytest` cannot be created.
+
+Cause: `--basetemp=.tmp/pytest` assumes its parent directory already exists. A developer checkout may contain ignored `.tmp`, while a clean CI checkout does not.
+
+Fix: use a single repository-root temporary directory such as `--basetemp=.pytest-tmp` and ignore it. CI must test a clean checkout, not only a working directory with residual folders.

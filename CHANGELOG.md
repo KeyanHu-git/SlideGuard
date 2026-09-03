@@ -15,3 +15,4 @@
 - Added compact SVG output that changes embedded bitmap payloads without changing the vector/filter subtree.
 - Added Chromium-first transparent SVG rendering for PowerPoint-compatible mask verification.
 - Added long-path-safe atomic publication and package verification for deep OneDrive folders.
+- Fixed pytest temporary-directory setup on clean GitHub Actions checkouts.

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "1.0",
+  "seed": 20260904,
+  "strategy": "pairwise plus explicit high-risk triples",
+  "cases": [
+    {"id": "LINE-001", "feature": "0.25pt horizontal solid/dash", "failureCodes": ["FIDELITY_DASH", "FIDELITY_SEAM"]},
+    {"id": "LINE-002", "feature": "0.5pt diagonal dash on half-pixel", "failureCodes": ["FIDELITY_DASH", "FIDELITY_SEAM"]},
+    {"id": "LINE-003", "feature": "vertical full-height dash", "failureCodes": ["FIDELITY_DASH", "FIDELITY_BORDER"]},
+    {"id": "PAINT-001", "feature": "soft outer shadow", "failureCodes": ["FIDELITY_SHADOW"]},
+    {"id": "PAINT-002", "feature": "two-color gradient plus rotation", "failureCodes": ["FIDELITY_GLOBAL"]},
+    {"id": "ALPHA-001", "feature": "smooth RGBA on dark and light mattes", "failureCodes": ["FIDELITY_ALPHA_CANVAS", "FIDELITY_ALPHA_RENDER"]},
+    {"id": "IMAGE-001", "feature": "asymmetric crop plus 17 degree rotation", "failureCodes": ["FIDELITY_CROP", "STRUCTURE_CONTENT_STREAM"]},
+    {"id": "OCCLUSION-001", "feature": "semi-transparent overlap and z-order", "failureCodes": ["FIDELITY_OCCLUSION"]},
+    {"id": "GROUP-001", "feature": "nested transformed group", "failureCodes": ["FIDELITY_OCCLUSION", "STRUCTURE_CONTENT_STREAM"]},
+    {"id": "TEXT-001", "feature": "Latin and CJK font runs", "failureCodes": ["FIDELITY_FONT"]},
+    {"id": "CANVAS-001", "feature": "four-edge full bleed", "failureCodes": ["FIDELITY_BORDER", "STRUCTURE_PAGE_BOX"]},
+    {"id": "MEDIA-001", "feature": "high-frequency PNG and JPEG recompression", "failureCodes": ["IMAGE_QUALITY_PPI", "IMAGE_QUALITY_REENCODED"]}
+  ]
+}
+

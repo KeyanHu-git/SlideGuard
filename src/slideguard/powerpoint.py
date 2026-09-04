@@ -71,3 +71,24 @@ def export_reference(
     )
     return {**result["export"], "powerpoint": result["powerpoint"]}
 
+
+def preview_reference(
+    pptx: Path,
+    slide: int,
+    work_dir: Path,
+    preview_width: int = 1600,
+    timeout: int = 180,
+) -> dict:
+    """Render one PowerPoint-authored PNG without creating a PDF."""
+    result = invoke(
+        {
+            "mode": "preview",
+            "pptxPath": str(pptx.resolve()),
+            "slide": slide,
+            "referenceWidth": preview_width,
+            "referencePng": str(work_dir / "powerpoint-preview.png"),
+        },
+        work_dir,
+        timeout=timeout,
+    )
+    return {**result["export"], "powerpoint": result["powerpoint"]}

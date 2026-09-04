@@ -43,6 +43,26 @@ slideguard export "deck.pptx" --slides 1,3-5
 slideguard export "deck.pptx" --slides all --out "D:\exports"
 ```
 
+The v0.2 development branch also has a visual Windows interface:
+
+```powershell
+py -m pip install -e ".[qa,gui]"
+slideguard gui
+```
+
+Open or drag in a PPTX, select the page, drag any of the four edges or four corners, and set each expansion edge independently. The blue line is the manual crop; the green dashed line is the effective output after expansion and fixed reference-pixel padding. The visual interface calls the same application service as the JSON entry point. Safe mid-export cancellation and the installer remain release blockers and are not represented as finished features.
+
+SlideGuard serializes its own PowerPoint workers. If PowerPoint is already open, the worker does not quit that process: it opens the requested file read-only without a window, closes only that copy, and restores the previous automation-security setting. Mid-call timeout recovery still requires the Office runner gate before beta release.
+
+Automation and AI callers should use the versioned JSON interface. It writes exactly one result document to stdout and resolves paths in a JSON file relative to that file:
+
+```powershell
+slideguard job request.json
+slideguard export "figure.pptx" --slides 1 --json
+```
+
+Set `behavior.dryRun` to `true` to validate the request, PPTX package and slide selection without opening PowerPoint or publishing files. The shipped request, result, error and progress schemas are documented in [docs/interface-contract-v0.2.md](docs/interface-contract-v0.2.md).
+
 To crop like PowerPoint, give the four boundary positions as percentages of the slide. This keeps the area from 5% to 95% horizontally and 3% to 97% vertically:
 
 ```powershell

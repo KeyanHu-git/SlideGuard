@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "slideguard"
-version = "0.1.0"
+version = "0.2.0.dev0"
 description = "Provable high-fidelity PowerPoint figure export for Windows"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -16,14 +16,17 @@ dependencies = [
   "Pillow>=10.0",
   "pypdf>=5.0",
   "CairoSVG>=2.7",
+  "jsonschema>=4.23",
 ]
 
 [project.optional-dependencies]
 qa = ["scikit-image>=0.22"]
+gui = ["PySide6>=6.7"]
 dev = ["pytest>=8.0", "build>=1.2"]
 
 [project.scripts]
 slideguard = "slideguard.cli:main"
+slideguard-gui = "slideguard.gui:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

@@ -539,6 +539,7 @@ class SlideGuardWindow(QMainWindow):
             self._draft_timer.stop()
             self._save_draft()
         self._source = path.resolve()
+        self._source_sha = None
         try:
             self._source_sha = sha256_file(self._source)
         except Exception as exc:

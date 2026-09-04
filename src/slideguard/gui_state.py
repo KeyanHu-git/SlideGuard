@@ -170,7 +170,10 @@ class GuiDraftStore:
             value = json.loads(path.read_text(encoding="utf-8"))
             draft = GuiDraft.from_document(value)
         except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
-            path.unlink(missing_ok=True)
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
             return None
         return draft if draft.source_sha256 == source_sha256 else None
 

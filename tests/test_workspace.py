@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -22,6 +23,17 @@ from slideguard.workspace import (
 
 OLD = "2020-01-01T00:00:00Z"
 NOW = datetime(2026, 9, 4, tzinfo=timezone.utc)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows process probing contract")
+def test_windows_process_existence_probe_never_calls_os_kill(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        workspace_module.os,
+        "kill",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("os.kill is destructive on Windows")),
+    )
+
+    assert workspace_module._process_exists(os.getpid()) is True
 
 
 def _rewrite_marker(path: Path, **changes: object) -> dict[str, object]:
@@ -284,6 +296,14 @@ def test_unavailable_start_token_fails_closed_for_a_live_pid(monkeypatch):
     monkeypatch.setattr(workspace_module, "_process_start_token", lambda _pid: None)
 
     assert workspace_module.owner_process_is_active(marker) is True
+
+
+def test_matching_start_token_does_not_revive_an_exited_process(monkeypatch):
+    marker = {"processId": 123, "processStartToken": "win:456"}
+    monkeypatch.setattr(workspace_module, "_process_exists", lambda _pid: False)
+    monkeypatch.setattr(workspace_module, "_process_start_token", lambda _pid: "win:456")
+
+    assert workspace_module.owner_process_is_active(marker) is False
 
 
 def test_standalone_doctor_uses_and_removes_an_owned_workspace(tmp_path: Path, monkeypatch):

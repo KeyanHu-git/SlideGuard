@@ -134,6 +134,29 @@ def _process_start_token(process_id: int) -> str | None:
 
 
 def _process_exists(process_id: int) -> bool:
+    if process_id <= 0:
+        return False
+    if os.name == "nt":
+        # ``os.kill(pid, 0)`` is a harmless existence probe on POSIX, but on
+        # Windows Python routes non-console signals through TerminateProcess.
+        # A zero signal can therefore terminate the process being inspected.
+        # Use query-only Win32 handles and never mutate the target process.
+        process_query_limited_information = 0x1000
+        still_active = 259
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(process_query_limited_information, False, process_id)
+        if not handle:
+            # Access denied proves that a protected process exists; every
+            # other failure is treated as not found for this exact PID.
+            return kernel32.GetLastError() == 5
+        try:
+            exit_code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                # Inspection failure is not permission to reclaim its files.
+                return True
+            return exit_code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(process_id, 0)
         return True
@@ -147,12 +170,17 @@ def owner_process_is_active(marker: dict[str, object]) -> bool:
     process_id = marker["processId"]
     expected = marker["processStartToken"]
     assert isinstance(process_id, int) and isinstance(expected, str)
+    # Windows can still expose creation-time metadata for an exited process
+    # while another handle to that process object remains open.  Existence in
+    # the kernel object table is not liveness: inspect the exit code first.
+    if not _process_exists(process_id):
+        return False
     if expected == "unavailable":
-        return _process_exists(process_id)
+        return True
     actual = _process_start_token(process_id)
     if actual is None:
         # Failure to inspect a live process is not permission to delete its files.
-        return _process_exists(process_id)
+        return True
     return actual == expected
 
 

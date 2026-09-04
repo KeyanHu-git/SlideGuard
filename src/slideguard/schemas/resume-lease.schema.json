@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://slideguard.local/schemas/resume-lease.schema.json",
+  "title": "SlideGuard single-writer resume lease",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "kind",
+    "taskId",
+    "workspaceNonce",
+    "leaseNonce",
+    "processId",
+    "processStartToken",
+    "createdAt"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "1.0"},
+    "kind": {"const": "slideguard-resume-lease"},
+    "taskId": {"type": "string", "minLength": 1, "maxLength": 256},
+    "workspaceNonce": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "leaseNonce": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "processId": {"type": "integer", "minimum": 1},
+    "processStartToken": {"type": "string", "minLength": 1},
+    "createdAt": {"type": "string", "format": "date-time"}
+  }
+}

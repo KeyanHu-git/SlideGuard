@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "bundled": {
+    "pythonRuntime": true,
+    "slideguard": true,
+    "runtimeDistributionRoots": [
+      "CairoSVG",
+      "jsonschema",
+      "lxml",
+      "numpy",
+      "Pillow",
+      "pypdf",
+      "PySide6",
+      "scikit-image"
+    ],
+    "embeddedBuildArtifacts": [
+      {
+        "distribution": "PyInstaller",
+        "role": "bootloader embedded in SlideGuard.exe"
+      }
+    ]
+  },
+  "buildOnlyDistributionRoots": [
+    "PyInstaller"
+  ],
+  "external": [
+    {
+      "name": "Microsoft PowerPoint",
+      "required": true,
+      "owner": "user-or-organization",
+      "reason": "Slide export uses the locally licensed PowerPoint COM server. SlideGuard never redistributes Office."
+    },
+    {
+      "name": "Windows PowerShell",
+      "required": true,
+      "owner": "operating-system",
+      "reason": "SlideGuard invokes the local Windows PowerShell environment to isolate PowerPoint automation."
+    },
+    {
+      "name": "Poppler command-line tools",
+      "required": true,
+      "owner": "user-or-packager",
+      "executables": ["pdftocairo.exe", "pdftoppm.exe", "pdfinfo.exe"],
+      "reason": "The default package does not redistribute Poppler. Put an audited build in external/poppler/Library/bin or external/poppler/bin, or add it to PATH."
+    },
+    {
+      "name": "Chromium-family browser",
+      "required": false,
+      "owner": "user-or-operating-system",
+      "executables": ["msedge.exe", "chrome.exe", "chromium.exe"],
+      "reason": "SlideGuard uses a local Chromium browser when found. Bundled CairoSVG remains the fallback, so no browser is copied into the package."
+    }
+  ]
+}

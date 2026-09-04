@@ -224,11 +224,13 @@ def invoke(
     cancel_token: CancellationToken | None = None,
 ) -> dict:
     work_dir.mkdir(parents=True, exist_ok=True)
-    job_path = work_dir / "powerpoint-job.json"
-    result_path = work_dir / "powerpoint-result.json"
-    status_path = work_dir / "powerpoint-worker-status.json"
-    cancel_path = work_dir / "powerpoint-cancel.json"
     nonce = uuid.uuid4().hex
+    operation_dir = work_dir / f"ppt-{nonce}"
+    operation_dir.mkdir(parents=False, exist_ok=False)
+    job_path = operation_dir / "powerpoint-job.json"
+    result_path = operation_dir / "powerpoint-result.json"
+    status_path = operation_dir / "powerpoint-worker-status.json"
+    cancel_path = operation_dir / "powerpoint-cancel.json"
     job = dict(job)
     job["resultPath"] = str(result_path)
     job["statusPath"] = str(status_path)
@@ -277,6 +279,25 @@ def invoke(
             grace_seconds=3.0,
         )
         details["timeoutSeconds"] = timeout
+        completed = _read_json(result_path)
+        final_state = _read_json(status_path)
+        if (
+            details.get("workerDisposition") == "cooperative-exit"
+            and isinstance(completed, dict)
+            and completed.get("nonce") == nonce
+            and isinstance(final_state, dict)
+            and final_state.get("nonce") == nonce
+            and final_state.get("cleanupComplete") is True
+        ):
+            if completed.get("ok"):
+                shutil.rmtree(operation_dir, ignore_errors=True)
+                return completed
+            error = completed.get("error") or {}
+            raise ExportError(
+                error.get("message") or "PowerPoint export failed",
+                stage="export",
+                details={**details, "completedDuringTimeoutGrace": True},
+            )
         raise ExportError(
             f"PowerPoint worker timed out after {timeout}s",
             stage="export",
@@ -288,9 +309,16 @@ def invoke(
         detail = stderr.strip() or stdout.strip()
         raise ExportError(f"PowerPoint worker returned no result: {detail}", stage="export")
     result = json.loads(result_path.read_text(encoding="utf-8-sig"))
+    if result.get("nonce") != nonce:
+        raise ExportError(
+            "PowerPoint worker returned a result for a different operation",
+            stage="export",
+            details={"resultNonceMismatch": True},
+        )
     if process.returncode or not result.get("ok"):
         error = result.get("error") or {}
         raise ExportError(error.get("message") or "PowerPoint export failed", stage="export")
+    shutil.rmtree(operation_dir, ignore_errors=True)
     return result
 
 

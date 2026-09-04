@@ -12,6 +12,7 @@ $statusPath = [IO.Path]::GetFullPath([string]$job.statusPath)
 $cancelPath = [IO.Path]::GetFullPath([string]$job.cancelPath)
 $nonce = [string]$job.nonce
 $result = [ordered]@{
+    nonce = $nonce
     ok = $false
     mode = [string]$job.mode
     powerpoint = $null

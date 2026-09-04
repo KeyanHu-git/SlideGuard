@@ -228,10 +228,60 @@ def test_invoke_maps_timeout_cleanup_evidence_into_export_error(tmp_path: Path, 
     assert caught.value.stage == "export"
     assert caught.value.details["workerDisposition"] == "cooperative-exit"
     assert caught.value.details["timeoutSeconds"] == 1
-    request = json.loads((tmp_path / "powerpoint-job.json").read_text(encoding="utf-8"))
+    request_path = next(tmp_path.glob("ppt-*/powerpoint-job.json"))
+    request = json.loads(request_path.read_text(encoding="utf-8"))
     assert request["statusPath"].endswith("powerpoint-worker-status.json")
     assert request["cancelPath"].endswith("powerpoint-cancel.json")
     assert request["nonce"]
+
+
+def test_invoke_accepts_nonce_bound_success_completed_during_timeout_grace(tmp_path: Path, monkeypatch):
+    worker = _TimedOutWorker(pid=78)
+    monkeypatch.setattr("slideguard.powerpoint.subprocess.Popen", lambda *args, **kwargs: worker)
+    monkeypatch.setattr("slideguard.powerpoint._powershell", lambda: "powershell")
+
+    def cleanup(_process, **kwargs):
+        nonce = kwargs["nonce"]
+        Path(kwargs["status_path"]).write_text(
+            json.dumps({"nonce": nonce, "cleanupComplete": True}), encoding="utf-8",
+        )
+        operation_dir = Path(kwargs["status_path"]).parent
+        (operation_dir / "powerpoint-result.json").write_text(
+            json.dumps({"nonce": nonce, "ok": True, "powerpoint": {"version": "16.0"}}),
+            encoding="utf-8",
+        )
+        return {"workerDisposition": "cooperative-exit", "residualRisk": False}
+
+    monkeypatch.setattr("slideguard.powerpoint._timeout_details", cleanup)
+
+    result = invoke({"mode": "probe"}, tmp_path, timeout=0)
+
+    assert result["powerpoint"]["version"] == "16.0"
+    assert list(tmp_path.glob("ppt-*")) == []
+
+
+def test_invoke_rejects_stale_or_incomplete_grace_result(tmp_path: Path, monkeypatch):
+    worker = _TimedOutWorker(pid=79)
+    monkeypatch.setattr("slideguard.powerpoint.subprocess.Popen", lambda *args, **kwargs: worker)
+    monkeypatch.setattr("slideguard.powerpoint._powershell", lambda: "powershell")
+
+    def cleanup(_process, **kwargs):
+        Path(kwargs["status_path"]).write_text(
+            json.dumps({"nonce": kwargs["nonce"], "cleanupComplete": False}), encoding="utf-8",
+        )
+        operation_dir = Path(kwargs["status_path"]).parent
+        (operation_dir / "powerpoint-result.json").write_text(
+            json.dumps({"nonce": "stale", "ok": True, "powerpoint": {"version": "old"}}),
+            encoding="utf-8",
+        )
+        return {"workerDisposition": "cooperative-exit", "residualRisk": False}
+
+    monkeypatch.setattr("slideguard.powerpoint._timeout_details", cleanup)
+
+    with pytest.raises(ExportError) as caught:
+        invoke({"mode": "probe"}, tmp_path, timeout=0)
+
+    assert caught.value.details["timeoutSeconds"] == 0
 
 
 def test_cleanup_script_has_only_pid_exact_termination():

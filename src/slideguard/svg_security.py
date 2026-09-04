@@ -25,7 +25,10 @@ def parse_svg(path: Path) -> etree._ElementTree:
     try:
         root = etree.fromstring(
             data,
-            parser=etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=False),
+            # Restored source images can create data-URI attributes above
+            # libxml2's default 10 MB attribute limit. The explicit 256 MB
+            # file cap plus the DTD/entity ban bounds this relaxed parser.
+            parser=etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=True),
         )
     except etree.XMLSyntaxError as exc:
         raise InputError("SVG is not valid safe XML") from exc

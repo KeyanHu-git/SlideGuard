@@ -6,6 +6,7 @@ from slideguard.errors import InputError
 from slideguard.faults import inject_svg_fault
 from slideguard.model import FeatureInventory, Verdict
 from slideguard.qa import validate_svg_structure, validate_svg_vector_invariant
+from slideguard.svg_security import parse_svg
 
 
 BASE = """<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 100">
@@ -85,3 +86,16 @@ def test_svg_dtd_is_rejected_before_xml_parsing(tmp_path: Path):
     source.write_text('<!DOCTYPE svg [<!ENTITY x "secret">]>' + BASE, encoding="utf-8")
     with pytest.raises(InputError, match="must not declare DTDs"):
         validate_svg_structure(source, inventory())
+
+
+def test_large_embedded_source_image_is_allowed_within_svg_size_cap(tmp_path: Path):
+    source = tmp_path / "large-image.svg"
+    payload = "A" * 10_500_000
+    source.write_text(
+        BASE.replace("</svg>", f'<image width="10" height="10" xlink:href="data:image/png;base64,{payload}"/></svg>'),
+        encoding="utf-8",
+    )
+
+    tree = parse_svg(source)
+
+    assert tree.getroot().tag.endswith("svg")

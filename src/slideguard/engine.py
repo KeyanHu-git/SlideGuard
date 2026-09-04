@@ -14,6 +14,13 @@ from typing import Callable
 
 from . import PIPELINE_REVISION, __version__
 from .cancellation import CancellationToken
+from .checkpoint import (
+    CheckpointCursor,
+    CheckpointIdentity,
+    CheckpointJournal,
+    CheckpointPhase,
+    CheckpointStatus,
+)
 from .errors import BudgetError, CancelledError, EnvironmentError, FidelityError
 from .model import ArtifactRecord, Finding, JobReport, Severity, Verdict
 from .offline import offline_policy
@@ -178,6 +185,12 @@ def _relative_artifact(kind: str, path: Path, package_dir: Path, slide: int, pro
     return ArtifactRecord(kind, path.relative_to(package_dir).as_posix(), sha256_file(path), path.stat().st_size, slide, producer, metadata or {})
 
 
+def _checkpoint_tree(root: Path, kind: str) -> list[tuple[str, Path]]:
+    if not root.exists():
+        return []
+    return [(kind, path) for path in sorted(root.rglob("*")) if path.is_file()]
+
+
 def _check_cancel(cancel_token: CancellationToken | None) -> None:
     if cancel_token:
         cancel_token.throw_if_cancelled()
@@ -251,6 +264,20 @@ def export_job(
     (package_dir / "svg").mkdir()
     (package_dir / "png").mkdir()
     (package_dir / "evidence").mkdir()
+    checkpoint = CheckpointJournal(
+        owned_workspace,
+        CheckpointIdentity.create(
+            task_id=job_id,
+            workspace_nonce=owned_workspace.nonce,
+            request_fingerprint=f"sha256:{config_hash}",
+            source_name=source.name,
+            source_sha256=source_hash_before,
+            tool_version=__version__,
+            pipeline_revision=PIPELINE_REVISION,
+        ),
+        slides,
+    )
+    checkpoint.advance(CheckpointPhase.DISCOVER)
 
     progress("environment", "start", "Checking the export environment", 0, 1)
     environment = doctor(
@@ -258,9 +285,11 @@ def export_job(
     )
     if not environment["ok"]:
         raise EnvironmentError("; ".join(environment["errors"]))
+    checkpoint.advance(CheckpointPhase.PREFLIGHT)
     progress("environment", "complete", "Export environment is ready", 1, 1)
     _check_cancel(cancel_token)
     features = [package.inventory(slide) for slide in slides]
+    checkpoint.advance(CheckpointPhase.INVENTORY)
     findings: list[Finding] = []
     artifacts: list[ArtifactRecord] = []
     slide_manifest = []
@@ -277,6 +306,15 @@ def export_job(
         if environment["powerpoint"] is None:
             environment["powerpoint"] = export["powerpoint"]
             environment["powerpointProbe"] = "verified-by-export"
+        cursor = CheckpointCursor(ordinal, slide)
+        checkpoint.advance(
+            CheckpointPhase.NATIVE_EXPORT,
+            cursor=cursor,
+            artifacts=[
+                ("native-pdf", Path(export["nativePdf"])),
+                ("reference-png", Path(export["referencePng"])),
+            ],
+        )
         progress("powerpoint", "complete", f"PowerPoint rendered source slide {slide}", ordinal - 1, len(slides), slide)
         _check_cancel(cancel_token)
         native_pdf = Path(export["nativePdf"])
@@ -301,6 +339,8 @@ def export_job(
         _check_cancel(cancel_token)
         artifacts.append(_relative_artifact("svg", final_svg, package_dir, slide, "pdftocairo+image-restore", asdict(svg_result)))
 
+        compact_svg: Path | None = None
+        compact_evidence: Path | None = None
         if options.svg_max_bytes is not None:
             compact_dir = package_dir / "svg-compact"
             compact_dir.mkdir(exist_ok=True)
@@ -313,6 +353,20 @@ def export_job(
                 "svg-compact", compact_svg, package_dir, slide,
                 "pdftocairo+budgeted-image-restore", {**asdict(compact_result), **compact_profile},
             ))
+        patch_checkpoint_artifacts = [
+            ("pdf", final_pdf),
+            ("raw-svg", raw_svg),
+            ("svg", final_svg),
+        ]
+        if compact_svg is not None:
+            patch_checkpoint_artifacts.append(("svg-compact", compact_svg))
+        checkpoint.advance(
+            CheckpointPhase.PATCH,
+            cursor=cursor,
+            artifacts=patch_checkpoint_artifacts,
+        )
+
+        if compact_svg is not None:
             findings.extend(validate_svg_structure(compact_svg, inventory))
             findings.extend(validate_svg_vector_invariant(compact_svg, raw_svg, inventory))
             compact_evidence = package_dir / "evidence" / f"p{ordinal:04d}-s{slide:04d}-compact"
@@ -351,6 +405,15 @@ def export_job(
                 severity=Severity.WARNING, message=f"{pdf_result.unmatched_images} large PDF image(s) were kept unchanged because no source match was safe",
                 validator="asset-stream@1.0", slide=slide, actual=pdf_result.unmatched_images,
             ))
+        validation_artifacts = [("png", final_png)]
+        validation_artifacts.extend(_checkpoint_tree(evidence_dir, "evidence"))
+        if compact_evidence is not None:
+            validation_artifacts.extend(_checkpoint_tree(compact_evidence, "evidence"))
+        checkpoint.advance(
+            CheckpointPhase.VALIDATE,
+            cursor=cursor,
+            artifacts=validation_artifacts,
+        )
         slide_manifest.append({"outputOrdinal": ordinal, "sourceSlide": slide, "slidePart": inventory.slide_part, "stem": stem})
         progress("slide", "complete", f"Completed source slide {slide}", ordinal, len(slides), slide)
 
@@ -390,6 +453,10 @@ def export_job(
     write_reports(report, package_dir)
     checksum_targets = [path for path in package_dir.rglob("*") if path.is_file() and path.name != "checksums.sha256"]
     (package_dir / "checksums.sha256").write_text(checksum_lines(checksum_targets, package_dir), encoding="utf-8")
+    checkpoint.advance(
+        CheckpointPhase.PACKAGE,
+        artifacts=_checkpoint_tree(package_dir, "package-file"),
+    )
     _check_cancel(cancel_token)
 
     if options.strict and verdict == Verdict.FAIL:
@@ -398,7 +465,13 @@ def export_job(
     output_root = (options.output_root or (source.parent / "slideguard-output")).resolve()
     final_dir = output_root / job_id
     progress("publication", "start", "Publishing the verified package", 0, 1)
+    checkpoint.advance(
+        CheckpointPhase.PUBLISH,
+        status=CheckpointStatus.PENDING,
+        artifacts=_checkpoint_tree(package_dir, "package-file"),
+    )
     _publish_package(package_dir, output_root, final_dir, job_id, cancel_token)
+    checkpoint.advance(CheckpointPhase.PUBLISH)
     progress("publication", "complete", "Verified package published", 1, 1)
     ensure_within(work_dir, default_work_root())
     if mark_workspace_complete(owned_workspace):

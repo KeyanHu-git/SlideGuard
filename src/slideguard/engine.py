@@ -43,7 +43,12 @@ class ExportOptions:
     strict: bool = True
 
 
-def doctor(work_root: Path | None = None, cancel_token: CancellationToken | None = None) -> dict:
+def doctor(
+    work_root: Path | None = None,
+    cancel_token: CancellationToken | None = None,
+    *,
+    probe_powerpoint: bool = True,
+) -> dict:
     from .util import require_executable
 
     work_root = work_root or default_work_root() / "doctor"
@@ -67,15 +72,18 @@ def doctor(work_root: Path | None = None, cancel_token: CancellationToken | None
     except Exception as exc:
         result["ok"] = False
         result["errors"].append(str(exc))
-    try:
-        result["powerpoint"] = (
-            probe(work_root, cancel_token=cancel_token) if cancel_token else probe(work_root)
-        )
-    except CancelledError:
-        raise
-    except Exception as exc:
-        result["ok"] = False
-        result["errors"].append(str(exc))
+    if probe_powerpoint:
+        try:
+            result["powerpoint"] = (
+                probe(work_root, cancel_token=cancel_token) if cancel_token else probe(work_root)
+            )
+        except CancelledError:
+            raise
+        except Exception as exc:
+            result["ok"] = False
+            result["errors"].append(str(exc))
+    else:
+        result["powerpointProbe"] = "deferred-to-export"
     packages = {
         "lxml": "lxml",
         "numpy": "numpy",
@@ -228,7 +236,9 @@ def export_job(
     (package_dir / "evidence").mkdir()
 
     progress("environment", "start", "Checking the export environment", 0, 1)
-    environment = doctor(work_dir / "doctor", cancel_token=cancel_token)
+    environment = doctor(
+        work_dir / "doctor", cancel_token=cancel_token, probe_powerpoint=False,
+    )
     if not environment["ok"]:
         raise EnvironmentError("; ".join(environment["errors"]))
     progress("environment", "complete", "Export environment is ready", 1, 1)
@@ -247,6 +257,9 @@ def export_job(
             source, slide, slide_work, options.reference_width,
             cancel_token=cancel_token,
         )
+        if environment["powerpoint"] is None:
+            environment["powerpoint"] = export["powerpoint"]
+            environment["powerpointProbe"] = "verified-by-export"
         progress("powerpoint", "complete", f"PowerPoint rendered source slide {slide}", ordinal - 1, len(slides), slide)
         _check_cancel(cancel_token)
         native_pdf = Path(export["nativePdf"])

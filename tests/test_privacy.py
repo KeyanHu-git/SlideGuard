@@ -218,7 +218,12 @@ def test_cycles_are_replaced_with_a_fixed_marker():
 
 def test_short_environment_values_are_not_used_as_global_replacements():
     assert redact_text("slide 1 of 3", environ={"SHORT": "of"}) == "slide 1 of 3"
-    assert redact_text("marker-abcd", environ={"LONG": "abcd"}) == "marker-" + ENV_VALUE
+    assert redact_text("manifest.json", environ={"LOG_FORMAT": "json"}) == "manifest.json"
+    assert redact_text("marker-abcd", environ={"API_TOKEN": "abcd"}) == "marker-" + ENV_VALUE
+    assert redact_text(
+        "marker-long-random-environment-value",
+        environ={"ARBITRARY": "long-random-environment-value"},
+    ) == "marker-" + ENV_VALUE
 
 
 def test_environment_replacement_cannot_destroy_error_identity_or_relative_paths():
@@ -230,9 +235,9 @@ def test_environment_replacement_cannot_destroy_error_identity_or_relative_paths
         "message": "export failed at evidence/p0001/diff.png",
     }
     environment = {
-        "A": "EXPORT_FAILED",
-        "B": "export",
-        "C": "evidence/p0001/diff.png",
+        "TOKEN_A": "EXPORT_FAILED",
+        "TOKEN_B": "export",
+        "TOKEN_C": "evidence/p0001/diff.png",
     }
 
     result = redact(value, environ=environment)

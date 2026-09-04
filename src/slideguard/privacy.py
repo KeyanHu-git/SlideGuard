@@ -155,7 +155,17 @@ def _redact_path_match(match: re.Match[str]) -> str:
 
 def _environment_values(environ: Mapping[str, str] | None) -> list[str]:
     source = os.environ if environ is None else environ
-    values = {str(value) for value in source.values() if isinstance(value, str) and len(value) >= 4}
+    sensitive_names = ("secret", "token", "password", "passwd", "key", "auth", "cookie", "session", "credential")
+    values = {
+        str(value)
+        for name, value in source.items()
+        if isinstance(value, str)
+        and len(value) >= 4
+        and (
+            any(marker in re.sub(r"[^a-z]", "", str(name).casefold()) for marker in sensitive_names)
+            or len(value) >= 16
+        )
+    }
     return sorted(values, key=len, reverse=True)
 
 

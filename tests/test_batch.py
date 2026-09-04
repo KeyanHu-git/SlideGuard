@@ -205,6 +205,21 @@ def test_safe_reuse_checks_hashes_and_keeps_damaged_package(tmp_path: Path):
     assert ".slideguard-rerun-" in str(new_package)
 
 
+def test_safe_reuse_rejects_package_with_unlisted_file(tmp_path: Path):
+    source = _pptx(tmp_path / "unlisted.pptx")
+    job = _job(source, idempotencyKey="unlisted-file", behavior={"dryRun": False})
+    service = _PublishingService()
+    runner = BatchService(service)
+
+    first = runner.execute(_batch([job], reuseExisting=True), base_dir=tmp_path)
+    old_package = Path(first["results"][0]["result"]["output"]["packagePath"])
+    (old_package / "not-in-checksums.bin").write_bytes(b"unexpected")
+    second = runner.execute(_batch([job], reuseExisting=True), base_dir=tmp_path)
+
+    assert service.calls == 2
+    assert second["results"][0]["reused"] is False
+
+
 def test_explicit_key_conflict_does_not_execute_second_job(tmp_path: Path):
     first_source = _pptx(tmp_path / "one.pptx")
     second_source = _pptx(tmp_path / "two.pptx")

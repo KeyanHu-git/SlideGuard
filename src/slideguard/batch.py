@@ -19,7 +19,9 @@ from .contracts import (
     validate_document,
 )
 from .errors import InputError
+from .model import Verdict
 from .util import ensure_within, native_long_path, sha256_file, stable_json
+from .verify import verify_package
 
 
 BATCH_DEFAULTS = {
@@ -140,32 +142,6 @@ def _path_inside(path: Path, root: Path) -> bool:
     return True
 
 
-def _verify_checksum_file(package: Path) -> bool:
-    checksum_path = package / "checksums.sha256"
-    try:
-        with open(native_long_path(checksum_path), "r", encoding="utf-8") as stream:
-            rows = stream.read().splitlines()
-    except (OSError, UnicodeError):
-        return False
-    if not rows:
-        return False
-    for row in rows:
-        if "  " not in row:
-            return False
-        expected, relative = row.split("  ", 1)
-        if len(expected) != 64 or not relative:
-            return False
-        candidate = (package / relative).resolve()
-        if not _path_inside(candidate, package) or not os.path.isfile(native_long_path(candidate)):
-            return False
-        try:
-            if sha256_file(candidate) != expected:
-                return False
-        except OSError:
-            return False
-    return True
-
-
 def _verify_published_result(
     result: dict[str, Any],
     prepared: PreparedRequest,
@@ -215,7 +191,11 @@ def _verify_published_result(
                 return False
         except (KeyError, TypeError, OSError):
             return False
-    return _verify_checksum_file(package)
+    try:
+        verdict, _findings = verify_package(manifest_path)
+    except (InputError, OSError):
+        return False
+    return verdict == Verdict.PASS
 
 
 def _cache_state(

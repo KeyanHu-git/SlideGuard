@@ -22,3 +22,9 @@ jobs:
       - run: python -m pip install -e ".[qa,dev]"
       - run: python scripts/audit_zero_egress.py
       - run: python -m pytest -q tests
+      - run: python scripts/interruption_matrix.py --output .test-results/interruption-matrix.json
+      - uses: actions/upload-artifact@v6
+        with:
+          name: interruption-matrix-py${{ matrix.python-version }}
+          path: .test-results/interruption-matrix.json
+          if-no-files-found: error

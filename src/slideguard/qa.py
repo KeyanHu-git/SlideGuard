@@ -195,6 +195,8 @@ def _reference_crop(reference_png: Path, crop_box: list[float], page_width: floa
 
 
 def _similarity(reference: Image.Image, candidate: Image.Image) -> tuple[float, float, float]:
+    from skimage.metrics import structural_similarity
+
     candidate = candidate.convert("RGB")
     reference = reference.convert("RGB").resize(candidate.size, Image.Resampling.LANCZOS)
     max_side = max(candidate.size)
@@ -206,11 +208,7 @@ def _similarity(reference: Image.Image, candidate: Image.Image) -> tuple[float, 
     first = np.asarray(reference, dtype=np.float32)
     second = np.asarray(candidate, dtype=np.float32)
     mae = float(np.mean(np.abs(first - second)) / 255.0)
-    try:
-        from skimage.metrics import structural_similarity
-        ssim = float(structural_similarity(first, second, channel_axis=2, data_range=255.0))
-    except Exception:
-        ssim = 1.0 - mae
+    ssim = float(structural_similarity(first, second, channel_axis=2, data_range=255.0))
     diff = np.max(np.abs(first - second), axis=2)
     mask = diff > 48
     row = mask.mean(axis=1)

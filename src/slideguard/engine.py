@@ -8,6 +8,7 @@ import subprocess
 import sys
 import uuid
 from dataclasses import asdict, dataclass
+from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 
 from . import PIPELINE_REVISION, __version__
@@ -69,11 +70,19 @@ def doctor(work_root: Path | None = None) -> dict:
     except Exception as exc:
         result["ok"] = False
         result["errors"].append(str(exc))
-    for module in ("lxml", "numpy", "PIL", "pypdf"):
+    packages = {
+        "lxml": "lxml",
+        "numpy": "numpy",
+        "PIL": "Pillow",
+        "pypdf": "pypdf",
+        "jsonschema": "jsonschema",
+        "skimage": "scikit-image",
+    }
+    for module, distribution in packages.items():
         try:
-            imported = __import__(module)
-            result.setdefault("pythonPackages", {})[module] = getattr(imported, "__version__", "present")
-        except Exception as exc:
+            __import__(module)
+            result.setdefault("pythonPackages", {})[module] = package_version(distribution)
+        except (ImportError, PackageNotFoundError) as exc:
             result["ok"] = False
             result["errors"].append(f"Python package {module}: {exc}")
     return result

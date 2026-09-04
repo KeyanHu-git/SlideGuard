@@ -17,16 +17,17 @@ dependencies = [
   "pypdf>=5.0",
   "CairoSVG>=2.7",
   "jsonschema>=4.23",
+  "scikit-image>=0.22",
 ]
 
 [project.optional-dependencies]
-qa = ["scikit-image>=0.22"]
+qa = []
 gui = ["PySide6>=6.7"]
 dev = ["pytest>=8.0", "build>=1.2"]
 
 [project.scripts]
 slideguard = "slideguard.cli:main"
-slideguard-gui = "slideguard.gui:main"
+slideguard-gui = "slideguard.gui_launcher:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

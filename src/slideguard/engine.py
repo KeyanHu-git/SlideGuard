@@ -10,6 +10,7 @@ import uuid
 from dataclasses import asdict, dataclass
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
+from typing import Callable
 
 from . import PIPELINE_REVISION, __version__
 from .cancellation import CancellationToken
@@ -192,7 +193,19 @@ def export_job(
     options: ExportOptions,
     *,
     cancel_token: CancellationToken | None = None,
+    progress_callback: Callable[[str, str, str, int, int, int | None], None] | None = None,
 ) -> tuple[Path, JobReport]:
+    def progress(
+        phase: str,
+        state: str,
+        message: str,
+        completed: int,
+        total: int,
+        slide: int | None = None,
+    ) -> None:
+        if progress_callback:
+            progress_callback(phase, state, message, completed, total, slide)
+
     _check_cancel(cancel_token)
     source = input_pptx.resolve()
     package = PptxPackage.open(source)
@@ -214,9 +227,11 @@ def export_job(
     (package_dir / "png").mkdir()
     (package_dir / "evidence").mkdir()
 
+    progress("environment", "start", "Checking the export environment", 0, 1)
     environment = doctor(work_dir / "doctor", cancel_token=cancel_token)
     if not environment["ok"]:
         raise EnvironmentError("; ".join(environment["errors"]))
+    progress("environment", "complete", "Export environment is ready", 1, 1)
     _check_cancel(cancel_token)
     features = [package.inventory(slide) for slide in slides]
     findings: list[Finding] = []
@@ -225,18 +240,21 @@ def export_job(
 
     for ordinal, (slide, inventory) in enumerate(zip(slides, features), 1):
         _check_cancel(cancel_token)
+        progress("slide", "start", f"Starting source slide {slide}", ordinal - 1, len(slides), slide)
         slide_work = work_dir / f"slide-{slide:04d}"
         slide_work.mkdir(parents=True)
         export = export_reference(
             source, slide, slide_work, options.reference_width,
             cancel_token=cancel_token,
         )
+        progress("powerpoint", "complete", f"PowerPoint rendered source slide {slide}", ordinal - 1, len(slides), slide)
         _check_cancel(cancel_token)
         native_pdf = Path(export["nativePdf"])
         reference_png = Path(export["referencePng"])
         stem = f"{slug}--p{ordinal:04d}-s{slide:04d}"
         final_pdf = package_dir / f"{stem}.pdf"
         pdf_result, profile = _patch_pdf_with_budget(native_pdf, package, slide, reference_png, final_pdf, options)
+        progress("pdf", "complete", f"PDF prepared for source slide {slide}", ordinal - 1, len(slides), slide)
         _check_cancel(cancel_token)
         artifacts.append(_relative_artifact("pdf", final_pdf, package_dir, slide, "powerpoint-native+image-restore", {**asdict(pdf_result), **profile}))
 
@@ -249,6 +267,7 @@ def export_job(
             padding_px=options.padding_px, crop_percent=options.crop_percent,
             expand_percent=options.expand_percent,
         )
+        progress("svg", "complete", f"SVG prepared for source slide {slide}", ordinal - 1, len(slides), slide)
         _check_cancel(cancel_token)
         artifacts.append(_relative_artifact("svg", final_svg, package_dir, slide, "pdftocairo+image-restore", asdict(svg_result)))
 
@@ -303,6 +322,7 @@ def export_job(
                 validator="asset-stream@1.0", slide=slide, actual=pdf_result.unmatched_images,
             ))
         slide_manifest.append({"outputOrdinal": ordinal, "sourceSlide": slide, "slidePart": inventory.slide_part, "stem": stem})
+        progress("slide", "complete", f"Completed source slide {slide}", ordinal, len(slides), slide)
 
     _check_cancel(cancel_token)
     source_hash_after = sha256_file(source)
@@ -347,7 +367,9 @@ def export_job(
 
     output_root = (options.output_root or (source.parent / "slideguard-output")).resolve()
     final_dir = output_root / job_id
+    progress("publication", "start", "Publishing the verified package", 0, 1)
     _publish_package(package_dir, output_root, final_dir, job_id, cancel_token)
+    progress("publication", "complete", "Verified package published", 1, 1)
     ensure_within(work_dir, default_work_root())
     shutil.rmtree(work_dir)
     return final_dir, report

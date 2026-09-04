@@ -28,6 +28,7 @@ def progress_event(
     *,
     completed: int,
     total: int,
+    slide: int | None = None,
 ) -> dict[str, Any]:
     event: dict[str, Any] = {
         "schemaVersion": "1.0",
@@ -42,6 +43,8 @@ def progress_event(
     }
     if task_id:
         event["taskId"] = task_id
+    if slide is not None:
+        event["slide"] = slide
     validate_document(event, "progress-event.schema.json")
     return event
 
@@ -61,13 +64,20 @@ class ExportService:
         task_id = document.get("taskId") if isinstance(document.get("taskId"), str) else None
         sequence = 0
 
-        def emit(phase: str, state: str, message: str, completed: int, total: int) -> None:
+        def emit(
+            phase: str,
+            state: str,
+            message: str,
+            completed: int,
+            total: int,
+            slide: int | None = None,
+        ) -> None:
             nonlocal sequence
             if event_sink is not None:
                 event_sink(
                     progress_event(
                         task_id, sequence, phase, state, message,
-                        completed=completed, total=total,
+                        completed=completed, total=total, slide=slide,
                     )
                 )
             sequence += 1
@@ -85,7 +95,14 @@ class ExportService:
 
             total_slides = len(prepared.effective_slides)
             emit("export", "start", "Starting export and verification", 0, total_slides)
-            output, report = export_job(prepared.source, prepared.options, cancel_token=cancel_token)
+            output, report = export_job(
+                prepared.source,
+                prepared.options,
+                cancel_token=cancel_token,
+                progress_callback=lambda phase, state, message, completed, total, slide: emit(
+                    phase, state, message, completed, total, slide,
+                ),
+            )
             emit("export", "complete", "Export and verification completed", total_slides, total_slides)
             return succeeded_result(prepared, output, report)
         except Exception as exc:

@@ -915,6 +915,19 @@ class SlideGuardWindow(QMainWindow):
             message = "正在检查输入和裁剪设置…" if state == "start" else "输入检查通过"
         elif phase == "export":
             message = "正在导出并自动验收…" if state == "start" else "导出与验收完成"
+        elif phase == "environment":
+            message = "正在检查 PowerPoint 与渲染环境…" if state == "start" else "运行环境检查通过"
+        elif phase == "slide":
+            slide = event.get("slide") or self.slide_spin.value()
+            message = f"正在处理第 {slide} 页…" if state == "start" else f"第 {slide} 页处理完成"
+        elif phase == "powerpoint":
+            message = "PowerPoint 页面渲染完成"
+        elif phase == "pdf":
+            message = "PDF 矢量结构与原图恢复完成"
+        elif phase == "svg":
+            message = "SVG 矢量结构与透明背景处理完成"
+        elif phase == "publication":
+            message = "正在原子发布验收通过的结果…" if state == "start" else "结果发布完成"
         else:
             message = "正在处理…"
         self.status.setText(message)

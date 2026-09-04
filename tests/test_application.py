@@ -5,6 +5,7 @@ from pathlib import Path
 
 from slideguard.application import ExportService
 from slideguard.cancellation import CancellationToken
+from slideguard.errors import CancelledError
 
 
 def _pptx(path: Path) -> Path:
@@ -85,3 +86,28 @@ def test_service_returns_stable_cancelled_result_before_export(tmp_path: Path, m
     assert result["status"] == "failed"
     assert result["exitCode"] == 60
     assert result["error"]["code"] == "CANCELLED"
+
+
+def test_service_forwards_monotonic_engine_progress_with_slide(tmp_path: Path, monkeypatch):
+    source = _pptx(tmp_path / "progress.pptx")
+    events = []
+
+    def synthetic_export(_source, _options, *, cancel_token, progress_callback):
+        assert cancel_token is None
+        progress_callback("environment", "complete", "ready", 1, 1, None)
+        progress_callback("slide", "start", "page", 0, 1, 1)
+        raise CancelledError("stop after progress")
+
+    monkeypatch.setattr("slideguard.application.export_job", synthetic_export)
+    result = ExportService().execute(
+        {"schemaVersion": "1.0", "input": source.name},
+        base_dir=tmp_path,
+        event_sink=events.append,
+    )
+
+    assert result["error"]["code"] == "CANCELLED"
+    assert [event["sequence"] for event in events] == list(range(len(events)))
+    assert [event["phase"] for event in events] == [
+        "validation", "validation", "export", "environment", "slide",
+    ]
+    assert events[-1]["slide"] == 1

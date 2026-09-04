@@ -64,6 +64,8 @@ slideguard batch examples\batch-request.json
 
 Set `behavior.dryRun` to `true` to validate the request, PPTX package and slide selection without opening PowerPoint or publishing files. The shipped request, result, error and progress schemas are documented in [docs/interface-contract-v0.2.md](docs/interface-contract-v0.2.md).
 
+Machine commands keep stdout to one strict JSON document. Output accidentally written by PowerPoint helpers, renderers, warnings, or native libraries is discarded; stderr receives only a small JSON summary with byte counts. Error text is redacted before serialization. `diagnose --out` is the exception: it writes the result to the named file and leaves stdout empty. See [docs/machine-output-contract.md](docs/machine-output-contract.md) for the command matrix and trust boundary.
+
 The batch entry accepts 1 to 100 independent requests and keeps output in input order. Its default `continue` strategy isolates a bad job and runs the rest. `fail-fast` leaves explicit skipped records. Safe reuse needs both the same source SHA-256 and the same normalized configuration; SlideGuard checks the published manifest, artifact hashes and `checksums.sha256` before returning a cached result. See [examples/batch-request.json](examples/batch-request.json) for a complete request.
 
 To crop like PowerPoint, give the four boundary positions as percentages of the slide. This keeps the area from 5% to 95% horizontally and 3% to 97% vertically:

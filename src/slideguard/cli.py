@@ -16,6 +16,7 @@ from .contracts import emergency_result, failed_result, load_request
 from .diagnosis import build_diagnostic_bundle
 from .engine import ExportOptions, doctor, export_job
 from .errors import EnvironmentError, InputError, SlideGuardError
+from .machine_io import MachineOutputFirewall, emit_noise_summary, sanitize_machine_document
 from .verify import verify_package
 
 
@@ -133,9 +134,14 @@ def _print_json(
 ) -> None:
     destination = stream or sys.stdout
     try:
-        payload = json.dumps(document, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-    except (TypeError, ValueError) as exc:
-        payload = json.dumps(fallback(exc), ensure_ascii=True, allow_nan=False, separators=(",", ":"))
+        safe_document = sanitize_machine_document(document)
+        payload = json.dumps(safe_document, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    except Exception as exc:
+        try:
+            safe_fallback = sanitize_machine_document(fallback(exc))
+            payload = json.dumps(safe_fallback, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
+        except Exception:
+            payload = '{"schemaVersion":"1.0","status":"failed","exitCode":70,"error":{"code":"INTERNAL_ERROR","message":"Machine result serialization failed","exitCode":70,"stage":"result-serialization","details":{}}}'
     print(payload, file=destination, flush=True)
 
 
@@ -158,23 +164,68 @@ def _configure_utf8_streams() -> None:
 
 def _run_machine(document: dict[str, Any], *, base_dir: Path) -> int:
     progress = document.get("behavior", {}).get("progress") == "jsonl" if isinstance(document.get("behavior"), dict) else False
-    sink = (lambda event: _print_json(event, stream=sys.stderr)) if progress else None
-    try:
-        result = ExportService().execute(document, base_dir=base_dir, event_sink=sink)
-    except Exception as exc:
-        result = _safe_failure(exc)
+    with MachineOutputFirewall() as firewall:
+        sink = (lambda event: _print_json(event, stream=firewall.safe_stderr)) if progress else None
+        try:
+            result = ExportService().execute(document, base_dir=base_dir, event_sink=sink)
+        except Exception as exc:
+            result = _safe_failure(exc)
+    emit_noise_summary(firewall)
     _print_json(result)
     return int(result["exitCode"])
 
 
 def _run_batch(document: dict[str, Any], *, base_dir: Path) -> int:
-    sink = lambda event: _print_json(event, stream=sys.stderr)
-    try:
-        result = BatchService().execute(document, base_dir=base_dir, event_sink=sink)
-    except Exception as exc:
-        result = batch_emergency_result(exc)
+    with MachineOutputFirewall() as firewall:
+        sink = lambda event: _print_json(event, stream=firewall.safe_stderr)
+        try:
+            result = BatchService().execute(document, base_dir=base_dir, event_sink=sink)
+        except Exception as exc:
+            result = batch_emergency_result(exc)
+    emit_noise_summary(firewall)
     _print_json(result, fallback=batch_emergency_result)
     return int(result["exitCode"])
+
+
+def _run_doctor_json() -> int:
+    with MachineOutputFirewall() as firewall:
+        try:
+            result = doctor()
+            exit_code = 0 if result["ok"] else 20
+        except Exception as exc:
+            result = _safe_failure(exc)
+            exit_code = int(result["exitCode"])
+    emit_noise_summary(firewall)
+    _print_json(result)
+    return exit_code
+
+
+def _run_verify_json(manifest: Path) -> int:
+    with MachineOutputFirewall() as firewall:
+        try:
+            verdict, findings = verify_package(manifest)
+            result = {"verdict": verdict.value, "findings": [asdict(item) for item in findings]}
+            exit_code = 0 if verdict.value == "PASS" else 50
+        except Exception as exc:
+            result = _safe_failure(exc)
+            exit_code = int(result["exitCode"])
+    emit_noise_summary(firewall)
+    _print_json(result)
+    return exit_code
+
+
+def _run_fixtures_json(output: Path) -> int:
+    with MachineOutputFirewall() as firewall:
+        try:
+            from .fixtures import build_core_fixture
+            result = build_core_fixture(output)
+            exit_code = 0
+        except Exception as exc:
+            result = _safe_failure(exc)
+            exit_code = int(result["exitCode"])
+    emit_noise_summary(firewall)
+    _print_json(result)
+    return exit_code
 
 
 def _read_diagnostic_object(path: Path, *, label: str) -> dict[str, Any]:
@@ -239,50 +290,56 @@ def _write_diagnostic_json(path: Path, document: dict[str, Any]) -> None:
 
 
 def _run_diagnose(args: argparse.Namespace) -> int:
-    try:
-        if args.out is not None:
-            output_identity = args.out.resolve()
-            input_identities = {
-                path.resolve()
-                for path in (args.doctor, args.error, args.report)
-                if path is not None
-            }
-            if output_identity in input_identities:
-                raise InputError(
-                    "The diagnostic output must be separate from every input file",
-                    stage="diagnosis",
-                    details={"operation": "protect-input"},
-                )
-        doctor_document = _read_diagnostic_object(args.doctor, label="doctor")
-        error_document = (
-            _read_diagnostic_object(args.error, label="error") if args.error is not None else None
-        )
-        report_document = (
-            _read_diagnostic_object(args.report, label="report") if args.report is not None else None
-        )
-        bundle = build_diagnostic_bundle(
-            doctor_document,
-            error_document,
-            report_document,
-            include_report=args.report is not None,
-        )
-        if args.out is not None:
-            _write_diagnostic_json(args.out, bundle)
-        else:
-            _print_json(bundle)
-        return 0
-    except SlideGuardError as exc:
-        result = _safe_failure(exc)
-    except Exception as exc:
-        safe_error = InputError(
-            "Diagnostic bundle generation failed without exposing local details",
-            stage="diagnosis",
-            details={"reason": "internal-error"},
-        )
-        safe_error.__cause__ = exc
-        result = _safe_failure(safe_error)
-    _print_json(result)
-    return int(result["exitCode"])
+    result: dict[str, Any] | None = None
+    with MachineOutputFirewall() as firewall:
+        try:
+            if args.out is not None:
+                output_identity = args.out.resolve()
+                input_identities = {
+                    path.resolve()
+                    for path in (args.doctor, args.error, args.report)
+                    if path is not None
+                }
+                if output_identity in input_identities:
+                    raise InputError(
+                        "The diagnostic output must be separate from every input file",
+                        stage="diagnosis",
+                        details={"operation": "protect-input"},
+                    )
+            doctor_document = _read_diagnostic_object(args.doctor, label="doctor")
+            error_document = (
+                _read_diagnostic_object(args.error, label="error") if args.error is not None else None
+            )
+            report_document = (
+                _read_diagnostic_object(args.report, label="report") if args.report is not None else None
+            )
+            bundle = build_diagnostic_bundle(
+                doctor_document,
+                error_document,
+                report_document,
+                include_report=args.report is not None,
+            )
+            if args.out is not None:
+                _write_diagnostic_json(args.out, bundle)
+            else:
+                result = bundle
+            exit_code = 0
+        except SlideGuardError as exc:
+            result = _safe_failure(exc)
+            exit_code = int(result["exitCode"])
+        except Exception as exc:
+            safe_error = InputError(
+                "Diagnostic bundle generation failed without exposing local details",
+                stage="diagnosis",
+                details={"reason": "internal-error"},
+            )
+            safe_error.__cause__ = exc
+            result = _safe_failure(safe_error)
+            exit_code = int(result["exitCode"])
+    emit_noise_summary(firewall)
+    if result is not None:
+        _print_json(result)
+    return exit_code
 
 
 def _document_from_export_args(args: argparse.Namespace) -> dict[str, Any]:
@@ -323,8 +380,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     machine_hint = bool(raw_argv) and (
-        raw_argv[0] in {"job", "batch", "diagnose"}
+        raw_argv[0] in {"job", "batch", "diagnose", "verify", "fixtures"}
         or (raw_argv[0] == "export" and "--json" in raw_argv)
+        or (raw_argv[0] == "doctor" and "--json" in raw_argv)
     )
     try:
         args = parser.parse_args(raw_argv)
@@ -350,16 +408,15 @@ def main(argv: list[str] | None = None) -> int:
         return exc.exit_code
     try:
         if args.command == "doctor":
-            result = doctor()
             if args.json:
-                print(json.dumps(result, ensure_ascii=False, indent=2))
-            else:
-                print(f"SlideGuard doctor: {'PASS' if result['ok'] else 'FAIL'}")
-                print(f"PowerPoint: {result.get('powerpoint') or 'unavailable'}")
-                for name, path in result["executables"].items():
-                    print(f"{name}: {path}")
-                for error in result["errors"]:
-                    print(f"ERROR: {error}", file=sys.stderr)
+                return _run_doctor_json()
+            result = doctor()
+            print(f"SlideGuard doctor: {'PASS' if result['ok'] else 'FAIL'}")
+            print(f"PowerPoint: {result.get('powerpoint') or 'unavailable'}")
+            for name, path in result["executables"].items():
+                print(f"{name}: {path}")
+            for error in result["errors"]:
+                print(f"ERROR: {error}", file=sys.stderr)
             return 0 if result["ok"] else 20
         if args.command == "export":
             if args.json:
@@ -447,18 +504,23 @@ def main(argv: list[str] | None = None) -> int:
                 ) from exc
             return run_gui(args.input)
         if args.command == "verify":
-            verdict, findings = verify_package(args.manifest)
-            print(json.dumps({"verdict": verdict.value, "findings": [asdict(item) for item in findings]}, ensure_ascii=False, default=str, indent=2))
-            return 0 if verdict.value == "PASS" else 50
+            return _run_verify_json(args.manifest)
         if args.command == "fixtures":
-            from .fixtures import build_core_fixture
-            result = build_core_fixture(args.out)
-            print(json.dumps(result, ensure_ascii=False, indent=2))
-            return 0
+            return _run_fixtures_json(args.out)
     except SlideGuardError as exc:
+        if machine_hint:
+            is_batch = bool(raw_argv) and raw_argv[0] == "batch"
+            result = batch_failed_result(exc) if is_batch else _safe_failure(exc)
+            _print_json(result, fallback=batch_emergency_result if is_batch else emergency_result)
+            return int(result["exitCode"])
         print(f"{exc.code}: {exc}", file=sys.stderr)
         return exc.exit_code
     except Exception as exc:
+        if machine_hint:
+            is_batch = bool(raw_argv) and raw_argv[0] == "batch"
+            result = batch_emergency_result(exc) if is_batch else _safe_failure(exc)
+            _print_json(result, fallback=batch_emergency_result if is_batch else emergency_result)
+            return int(result["exitCode"])
         print(f"UNEXPECTED_ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 70
     return 70

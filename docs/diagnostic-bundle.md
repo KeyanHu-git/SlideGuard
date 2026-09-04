@@ -1,6 +1,6 @@
 # SlideGuard 离线诊断包
 
-状态：v0.2 纯逻辑数据契约。当前版本没有用户命令，KEY-169 将另行接入界面和文件保存。
+状态：v0.2 离线数据契约与命令行入口。
 
 ## 用途
 
@@ -70,14 +70,39 @@ bundle = build_diagnostic_bundle(
 )
 ```
 
-`build_diagnostic_bundle`只处理内存中的对象，不写文件。KEY-169 的用户入口负责征得报告选择、选择保存位置和展示拒绝原因。
+`build_diagnostic_bundle`只处理内存中的对象，不写文件。命令行入口负责征得授权、读取输入和原子保存结果。
+
+## 命令行入口
+
+生成动作必须带 `--consent`。不带该标志时，命令立即返回结构化失败，不读取任何输入，也不创建输出文件。
+
+```powershell
+slideguard diagnose --consent --doctor doctor.json
+```
+
+默认只把一份严格 JSON 写到 stdout。若需要文件，指定 `--out`；文件通过同目录临时文件和原子替换发布，成功时 stdout 和 stderr 均为空。
+输出文件不能与 doctor、error 或 report 输入指向同一文件，防止覆盖原始材料。
+
+```powershell
+slideguard diagnose --consent --doctor doctor.json --error error.json --out diagnostic.json
+```
+
+QA 报告不会自动查找或读取。只有明确提供 `--report` 时，命令才读取它并加入固定摘要：
+
+```powershell
+slideguard diagnose --consent --doctor doctor.json --report qa-report.json --out diagnostic.json
+```
+
+`doctor`、`error` 和 `report` 输入都必须是严格 UTF-8 编码的 JSON 对象。重复键、NaN、Infinity、数组根节点和损坏的 UTF-8 会被拒绝。失败仍在 stdout 返回一份现有格式的结构化错误，退出码为 30；错误不会回显输入或输出的绝对路径。
+
+此命令只在本机读取和写入指定文件，不包含上传或网络步骤。输出仍经过核心的两次脱敏、两次秘密扫描、元数据内容策略、Schema 校验和 256 KiB 限制。
 
 ## 验证
 
 运行：
 
 ```powershell
-python -m pytest -q tests/test_diagnosis.py
+python -m pytest -q tests/test_diagnosis.py tests/test_diagnostic_cli.py
 ```
 
 测试覆盖 Schema、固定建议、两次扫描、报告选择、大小限制和对抗输入。对抗样本含用户名、令牌、UNC 路径及带中文文件名的图片路径；断言同时检查拒绝错误没有原值。

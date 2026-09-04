@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -11,6 +13,7 @@ from . import __version__
 from .application import ExportService
 from .batch import BatchService, batch_emergency_result, batch_failed_result
 from .contracts import emergency_result, failed_result, load_request
+from .diagnosis import build_diagnostic_bundle
 from .engine import ExportOptions, doctor, export_job
 from .errors import EnvironmentError, InputError, SlideGuardError
 from .verify import verify_package
@@ -88,6 +91,30 @@ def build_parser() -> argparse.ArgumentParser:
     batch_parser = sub.add_parser("batch", help="Run an ordered batch JSON request from a UTF-8 file or stdin")
     batch_parser.add_argument("request", nargs="?", default="-", help="Batch request JSON path, or - for stdin")
 
+    diagnose_parser = sub.add_parser(
+        "diagnose", help="Build a private, offline diagnostic JSON bundle after explicit consent",
+    )
+    diagnose_parser.add_argument(
+        "--consent",
+        action="store_true",
+        required=True,
+        help="Confirm local collection of the documented metadata categories",
+    )
+    diagnose_parser.add_argument("--doctor", type=Path, required=True, help="Strict UTF-8 doctor JSON object")
+    diagnose_parser.add_argument("--error", type=Path, default=None, help="Optional strict UTF-8 error JSON object")
+    diagnose_parser.add_argument(
+        "--report",
+        type=Path,
+        default=None,
+        help="Explicitly opt in to a reduced QA report summary",
+    )
+    diagnose_parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Atomically write the bundle instead of printing it to stdout",
+    )
+
     gui_parser = sub.add_parser("gui", help="Open the visual crop and export window")
     gui_parser.add_argument("input", nargs="?", type=Path, default=None)
 
@@ -150,6 +177,114 @@ def _run_batch(document: dict[str, Any], *, base_dir: Path) -> int:
     return int(result["exitCode"])
 
 
+def _read_diagnostic_object(path: Path, *, label: str) -> dict[str, Any]:
+    try:
+        payload = path.read_bytes().decode("utf-8", errors="strict")
+    except (OSError, UnicodeError) as exc:
+        raise InputError(
+            f"Cannot read the {label} JSON file as strict UTF-8",
+            stage="diagnosis",
+            details={"input": label},
+        ) from exc
+    try:
+        return load_request(payload)
+    except Exception as exc:
+        raise InputError(
+            f"The {label} input must be a strict JSON object",
+            stage="diagnosis",
+            details={"input": label},
+        ) from exc
+
+
+def _write_diagnostic_json(path: Path, document: dict[str, Any]) -> None:
+    try:
+        payload = json.dumps(
+            document,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise InputError(
+            "The diagnostic bundle could not be encoded as strict JSON",
+            stage="diagnosis",
+        ) from exc
+
+    temporary_path: Path | None = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent),
+        )
+        temporary_path = Path(temporary_name)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+    except OSError as exc:
+        raise InputError(
+            "Cannot atomically write the diagnostic output file",
+            stage="diagnosis",
+            details={"operation": "write-output"},
+        ) from exc
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _run_diagnose(args: argparse.Namespace) -> int:
+    try:
+        if args.out is not None:
+            output_identity = args.out.resolve()
+            input_identities = {
+                path.resolve()
+                for path in (args.doctor, args.error, args.report)
+                if path is not None
+            }
+            if output_identity in input_identities:
+                raise InputError(
+                    "The diagnostic output must be separate from every input file",
+                    stage="diagnosis",
+                    details={"operation": "protect-input"},
+                )
+        doctor_document = _read_diagnostic_object(args.doctor, label="doctor")
+        error_document = (
+            _read_diagnostic_object(args.error, label="error") if args.error is not None else None
+        )
+        report_document = (
+            _read_diagnostic_object(args.report, label="report") if args.report is not None else None
+        )
+        bundle = build_diagnostic_bundle(
+            doctor_document,
+            error_document,
+            report_document,
+            include_report=args.report is not None,
+        )
+        if args.out is not None:
+            _write_diagnostic_json(args.out, bundle)
+        else:
+            _print_json(bundle)
+        return 0
+    except SlideGuardError as exc:
+        result = _safe_failure(exc)
+    except Exception as exc:
+        safe_error = InputError(
+            "Diagnostic bundle generation failed without exposing local details",
+            stage="diagnosis",
+            details={"reason": "internal-error"},
+        )
+        safe_error.__cause__ = exc
+        result = _safe_failure(safe_error)
+    _print_json(result)
+    return int(result["exitCode"])
+
+
 def _document_from_export_args(args: argparse.Namespace) -> dict[str, Any]:
     crop: dict[str, Any] = {
         "mode": "manual" if args.crop_percent else "auto",
@@ -188,13 +323,26 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     machine_hint = bool(raw_argv) and (
-        raw_argv[0] in {"job", "batch"} or (raw_argv[0] == "export" and "--json" in raw_argv)
+        raw_argv[0] in {"job", "batch", "diagnose"}
+        or (raw_argv[0] == "export" and "--json" in raw_argv)
     )
     try:
         args = parser.parse_args(raw_argv)
     except InputError as exc:
         if machine_hint:
             is_batch = bool(raw_argv) and raw_argv[0] == "batch"
+            if raw_argv[0] == "diagnose":
+                exc = InputError(
+                    "Explicit diagnostic consent is required"
+                    if "--consent" not in raw_argv
+                    else "Invalid diagnose command arguments",
+                    stage="validation",
+                    details={
+                        "reason": "consent-required"
+                        if "--consent" not in raw_argv
+                        else "invalid-arguments"
+                    },
+                )
             result = batch_failed_result(exc) if is_batch else _safe_failure(exc)
             _print_json(result, fallback=batch_emergency_result if is_batch else emergency_result)
             return int(result["exitCode"])
@@ -287,6 +435,8 @@ def main(argv: list[str] | None = None) -> int:
                 _print_json(result, fallback=batch_emergency_result)
                 return int(result["exitCode"])
             return _run_batch(document, base_dir=path.parent)
+        if args.command == "diagnose":
+            return _run_diagnose(args)
         if args.command == "gui":
             try:
                 from .gui import run_gui

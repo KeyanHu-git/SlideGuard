@@ -4,10 +4,13 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest
+
+pytest.importorskip("PySide6")
+
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QImage, QKeyEvent, QPixmap
 from PySide6.QtWidgets import QApplication
-import pytest
 
 from slideguard.geometry import NormalizedRect
 from slideguard.gui import CropCanvas, SlideGuardWindow

@@ -17,6 +17,7 @@ from .diagnosis import build_diagnostic_bundle
 from .engine import ExportOptions, doctor, export_job
 from .errors import EnvironmentError, InputError, SlideGuardError
 from .machine_io import MachineOutputFirewall, emit_noise_summary, sanitize_machine_document
+from .resume import ResumePlanningService, format_resume_plan
 from .verify import verify_package
 from .workspace import run_startup_maintenance
 
@@ -92,6 +93,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     batch_parser = sub.add_parser("batch", help="Run an ordered batch JSON request from a UTF-8 file or stdin")
     batch_parser.add_argument("request", nargs="?", default="-", help="Batch request JSON path, or - for stdin")
+
+    resume_parser = sub.add_parser(
+        "resume-plan",
+        help="Validate one checkpoint and print a deterministic read-only resume plan",
+    )
+    resume_parser.add_argument("request", nargs="?", default="-", help="ExportRequest JSON path, or - for stdin")
+    resume_parser.add_argument("--workspace", type=Path, required=True, help="Owned export workspace containing job-state.json")
+    resume_parser.add_argument("--json", action="store_true", help="Print the versioned machine-readable plan")
 
     diagnose_parser = sub.add_parser(
         "diagnose", help="Build a private, offline diagnostic JSON bundle after explicit consent",
@@ -186,6 +195,41 @@ def _run_batch(document: dict[str, Any], *, base_dir: Path) -> int:
     emit_noise_summary(firewall)
     _print_json(result, fallback=batch_emergency_result)
     return int(result["exitCode"])
+
+
+def _run_resume_plan(
+    document: dict[str, Any],
+    *,
+    base_dir: Path,
+    workspace: Path,
+) -> int:
+    with MachineOutputFirewall() as firewall:
+        try:
+            result = ResumePlanningService().execute(
+                document,
+                base_dir=base_dir,
+                workspace_path=workspace,
+            )
+        except Exception as exc:
+            result = _safe_failure(exc)
+    emit_noise_summary(firewall)
+    _print_json(result)
+    return int(result["exitCode"])
+
+
+def _read_export_request_argument(value: str) -> tuple[dict[str, Any], Path]:
+    if value == "-":
+        try:
+            request_text = sys.stdin.read()
+        except UnicodeError as exc:
+            raise InputError("stdin is not valid UTF-8", stage="validation") from exc
+        return load_request(request_text), Path.cwd()
+    path = Path(value).resolve()
+    try:
+        request_text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise InputError(f"Cannot read request file: {path}", stage="validation") from exc
+    return load_request(request_text), path.parent
 
 
 def _run_doctor_json() -> int:
@@ -384,6 +428,7 @@ def main(argv: list[str] | None = None) -> int:
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     machine_hint = bool(raw_argv) and (
         raw_argv[0] in {"job", "batch", "diagnose", "verify", "fixtures"}
+        or (raw_argv[0] == "resume-plan" and "--json" in raw_argv)
         or (raw_argv[0] == "export" and "--json" in raw_argv)
         or (raw_argv[0] == "doctor" and "--json" in raw_argv)
     )
@@ -495,6 +540,27 @@ def main(argv: list[str] | None = None) -> int:
                 _print_json(result, fallback=batch_emergency_result)
                 return int(result["exitCode"])
             return _run_batch(document, base_dir=path.parent)
+        if args.command == "resume-plan":
+            if args.json:
+                try:
+                    document, base_dir = _read_export_request_argument(args.request)
+                except Exception as exc:
+                    result = _safe_failure(exc)
+                    _print_json(result)
+                    return int(result["exitCode"])
+                return _run_resume_plan(
+                    document,
+                    base_dir=base_dir,
+                    workspace=args.workspace,
+                )
+            document, base_dir = _read_export_request_argument(args.request)
+            plan = ResumePlanningService().execute(
+                document,
+                base_dir=base_dir,
+                workspace_path=args.workspace,
+            )
+            print(format_resume_plan(plan))
+            return int(plan["exitCode"])
         if args.command == "diagnose":
             return _run_diagnose(args)
         if args.command == "gui":

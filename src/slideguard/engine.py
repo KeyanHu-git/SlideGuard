@@ -52,6 +52,55 @@ class ExportOptions:
     strict: bool = True
 
 
+@dataclass(frozen=True, slots=True)
+class ExportTaskModel:
+    """Stable export identity shared by execution and recovery planning."""
+
+    source: Path
+    source_sha256: str
+    slides: tuple[int, ...]
+    config: dict
+    request_fingerprint: str
+    slug: str
+    job_id: str
+    output_root: Path
+    final_dir: Path
+
+
+def build_export_task_model(
+    input_pptx: Path,
+    options: ExportOptions,
+    *,
+    slide_count: int | None = None,
+) -> ExportTaskModel:
+    """Derive the exact identity used by the export engine without starting PowerPoint."""
+    source = input_pptx.resolve()
+    if slide_count is None:
+        slide_count = PptxPackage.open(source).slide_count
+    slides = tuple(parse_slides(options.slides, slide_count))
+    source_sha256 = sha256_file(source)
+    config = asdict(options)
+    config["output_root"] = str(options.output_root) if options.output_root else None
+    config["dpis"] = list(options.dpis)
+    config["svg_widths"] = list(options.svg_widths)
+    config["pipeline_revision"] = PIPELINE_REVISION
+    config_hash = __import__("hashlib").sha256(stable_json(config).encode("utf-8")).hexdigest()
+    slug = safe_slug(source.stem)
+    job_id = f"{slug}--{source_sha256[:8]}--{config_hash[:8]}"
+    output_root = (options.output_root or (source.parent / "slideguard-output")).resolve()
+    return ExportTaskModel(
+        source=source,
+        source_sha256=source_sha256,
+        slides=slides,
+        config=config,
+        request_fingerprint=f"sha256:{config_hash}",
+        slug=slug,
+        job_id=job_id,
+        output_root=output_root,
+        final_dir=output_root / job_id,
+    )
+
+
 def doctor(
     work_root: Path | None = None,
     cancel_token: CancellationToken | None = None,
@@ -241,17 +290,14 @@ def export_job(
     _check_cancel(cancel_token)
     source = input_pptx.resolve()
     package = PptxPackage.open(source)
-    slides = parse_slides(options.slides, package.slide_count)
+    task = build_export_task_model(source, options, slide_count=package.slide_count)
+    slides = task.slides
     _check_cancel(cancel_token)
-    source_hash_before = sha256_file(source)
-    config = asdict(options)
-    config["output_root"] = str(options.output_root) if options.output_root else None
-    config["dpis"] = list(options.dpis)
-    config["svg_widths"] = list(options.svg_widths)
-    config["pipeline_revision"] = PIPELINE_REVISION
-    config_hash = __import__("hashlib").sha256(stable_json(config).encode("utf-8")).hexdigest()
-    slug = safe_slug(source.stem)
-    job_id = f"{slug}--{source_hash_before[:8]}--{config_hash[:8]}"
+    source_hash_before = task.source_sha256
+    config = task.config
+    config_hash = task.request_fingerprint.removeprefix("sha256:")
+    slug = task.slug
+    job_id = task.job_id
     owned_workspace = create_owned_workspace(
         default_work_root(),
         prefix=f"{source_hash_before[:8]}-{config_hash[:8]}",
@@ -269,7 +315,7 @@ def export_job(
         CheckpointIdentity.create(
             task_id=job_id,
             workspace_nonce=owned_workspace.nonce,
-            request_fingerprint=f"sha256:{config_hash}",
+            request_fingerprint=task.request_fingerprint,
             source_name=source.name,
             source_sha256=source_hash_before,
             tool_version=__version__,
@@ -462,8 +508,8 @@ def export_job(
     if options.strict and verdict == Verdict.FAIL:
         raise FidelityError(f"QA failed; evidence remains at {package_dir}")
 
-    output_root = (options.output_root or (source.parent / "slideguard-output")).resolve()
-    final_dir = output_root / job_id
+    output_root = task.output_root
+    final_dir = task.final_dir
     progress("publication", "start", "Publishing the verified package", 0, 1)
     checkpoint.advance(
         CheckpointPhase.PUBLISH,

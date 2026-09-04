@@ -306,7 +306,7 @@ def _strict_json(raw: bytes) -> object:
 
 
 def _safe_relative_path(value: object) -> str:
-    if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
+    if not isinstance(value, str) or not value or "\\" in value or ":" in value or "\x00" in value:
         raise CheckpointPathError("Checkpoint contains an unsafe artifact path", stage="checkpoint")
     pure = PurePosixPath(value)
     if pure.is_absolute() or pure.parts[0].endswith(":") or any(part in {"", ".", ".."} for part in pure.parts):

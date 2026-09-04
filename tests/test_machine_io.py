@@ -236,7 +236,7 @@ def test_human_help_remains_plain_text(capsys):
     captured = capsys.readouterr()
     assert raised.value.code == 0
     assert captured.out.startswith("usage: slideguard")
-    assert "{doctor,export,job,batch,diagnose,gui,verify,fixtures}" in captured.out
+    assert "{doctor,export,job,batch,resume-plan,diagnose,gui,verify,fixtures}" in captured.out
 
 
 def test_machine_dispatch_failure_is_one_redacted_json_document(monkeypatch, capsys):

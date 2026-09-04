@@ -44,6 +44,7 @@ from .geometry import NormalizedRect, effective_pixel_box, move_normalized_rect,
 from .gui_state import EditHistory, EditorState, GuiDraft, GuiDraftStore
 from .ooxml import PptxPackage
 from .powerpoint import preview_reference
+from .resume import ResumePlanningService
 from .util import default_work_root, sha256_file
 from .workspace import (
     OwnedWorkspace,
@@ -350,6 +351,27 @@ class ExportWorker(QObject):
             base_dir=self.base_dir,
             event_sink=self.progress.emit,
             cancel_token=self.cancel_token,
+        )
+        self.finished.emit(result)
+
+
+class ResumePlanWorker(QObject):
+    """Desktop adapter for the same read-only plan returned to JSON callers."""
+
+    finished = Signal(object)
+
+    def __init__(self, document: dict[str, Any], base_dir: Path, workspace_path: Path) -> None:
+        super().__init__()
+        self.document = document
+        self.base_dir = base_dir
+        self.workspace_path = workspace_path
+
+    @Slot()
+    def run(self) -> None:
+        result = ResumePlanningService().execute(
+            self.document,
+            base_dir=self.base_dir,
+            workspace_path=self.workspace_path,
         )
         self.finished.emit(result)
 

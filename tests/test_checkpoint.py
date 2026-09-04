@@ -254,6 +254,27 @@ def test_absolute_artifact_path_is_rejected_before_schema_details_can_echo_it(tm
     assert "Users" not in str(error.value)
 
 
+def test_windows_alternate_data_stream_artifact_path_is_rejected_before_access(tmp_path: Path):
+    workspace, journal = _journal(tmp_path, slides=(1,))
+    journal.advance(CheckpointPhase.DISCOVER)
+    path = workspace.path / CHECKPOINT_FILENAME
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["artifacts"] = [{
+        "kind": "native-pdf",
+        "path": "slide-0001/native.pdf:stream",
+        "bytes": 1,
+        "sha256": "0" * 64,
+        "phase": "DISCOVER",
+        "sequence": 0,
+    }]
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(CheckpointPathError) as error:
+        load_checkpoint(workspace, verify_artifacts=False)
+
+    assert error.value.code == "CHECKPOINT_PATH_UNSAFE"
+
+
 def test_artifact_size_hash_and_immutability_are_verified(tmp_path: Path):
     workspace, journal = _journal(tmp_path, slides=(1,))
     artifact = workspace.path / "native.pdf"

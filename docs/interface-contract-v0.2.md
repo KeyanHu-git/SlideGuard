@@ -68,6 +68,8 @@ The authoritative schema files are shipped in `src/slideguard/schemas/`:
 - `progress-event.schema.json`
 - `batch-request.schema.json`
 - `batch-result.schema.json`
+- `job-state.schema.json`
+- `resume-plan.schema.json`
 
 ## Compatibility
 

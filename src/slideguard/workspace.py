@@ -276,6 +276,28 @@ def create_owned_workspace(
     return OwnedWorkspace(path=path, root=root, nonce=nonce, task_id=task_id, kind=kind)
 
 
+def open_owned_workspace(
+    path: Path,
+    *,
+    expected_kind: str | None = None,
+) -> OwnedWorkspace:
+    """Open one marker-bound direct child without weakening the owned-root checks."""
+    candidate = _absolute(path)
+    root = candidate.parent
+    candidate, root = _require_direct_child(candidate, root)
+    marker, _ = _read_marker(candidate, root=root)
+    kind = str(marker["kind"])
+    if expected_kind is not None and kind != expected_kind:
+        raise WorkspaceSafetyError("workspace kind does not match the requested operation")
+    return OwnedWorkspace(
+        path=candidate,
+        root=root,
+        nonce=str(marker["instanceNonce"]),
+        task_id=str(marker["taskId"]),
+        kind=kind,
+    )
+
+
 def mark_workspace_complete(workspace: OwnedWorkspace) -> bool:
     try:
         path, root = _require_direct_child(workspace.path, workspace.root)

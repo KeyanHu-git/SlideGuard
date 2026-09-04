@@ -36,7 +36,7 @@ DISCOVER
 
 Every state has a deterministic sequence number derived from the phase and slide cursor. A transition advances exactly one sequence. Per-slide cursors bind the output ordinal to the selected source slide. Only `PUBLISH` may be pending, and the top-level `complete` flag is true only for `PUBLISH/complete`.
 
-Every reusable artifact is recorded by workspace-relative POSIX path, byte size and SHA-256. Absolute paths, parent traversal, links, junctions, reparse points, missing files, changed files, duplicate paths, unsorted records and artifacts from a future sequence fail closed.
+Every reusable artifact is recorded by workspace-relative POSIX path, byte size and SHA-256. Absolute paths, parent traversal, Windows alternate-data-stream colons, links, junctions, reparse points, missing files, changed files, duplicate paths, unsorted records and artifacts from a future sequence fail closed.
 
 ## Stable failure codes
 
@@ -51,4 +51,4 @@ Every reusable artifact is recorded by workspace-relative POSIX path, byte size 
 | `CHECKPOINT_ARTIFACT_INVALID` | A recorded artifact is missing, changed or not a regular file |
 | `CHECKPOINT_TRANSITION_INVALID` | Phase, cursor, sequence, pending or completion semantics are inconsistent |
 
-Reading and artifact verification are separate from deciding what can be resumed. KEY-174 owns the deterministic resume plan; KEY-176 owns interruption injection across every boundary.
+Reading and artifact verification are separate from deciding what can be resumed. The deterministic rules and machine fields are defined in [resume-plan-contract.md](resume-plan-contract.md). KEY-176 owns interruption injection across every boundary.

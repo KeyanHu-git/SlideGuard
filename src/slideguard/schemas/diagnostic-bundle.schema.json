@@ -128,12 +128,24 @@
     "safety": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["contentPolicy", "privacyPasses", "secretScan", "maxBytes"],
+      "required": ["contentPolicy", "privacyPasses", "secretScan", "maxBytes", "networkPolicy"],
       "properties": {
         "contentPolicy": {"const": "metadata-only"},
         "privacyPasses": {"const": 2},
         "secretScan": {"const": "passed"},
-        "maxBytes": {"type": "integer", "minimum": 1024, "maximum": 262144}
+        "maxBytes": {"type": "integer", "minimum": 1024, "maximum": 262144},
+        "networkPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["version", "mode", "telemetryEnabled", "automaticUploadsEnabled", "updateChecksEnabled"],
+          "properties": {
+            "version": {"const": "1.0"},
+            "mode": {"const": "offline-only"},
+            "telemetryEnabled": {"const": false},
+            "automaticUploadsEnabled": {"const": false},
+            "updateChecksEnabled": {"const": false}
+          }
+        }
       }
     }
   }

@@ -16,6 +16,7 @@ from . import PIPELINE_REVISION, __version__
 from .cancellation import CancellationToken
 from .errors import BudgetError, CancelledError, EnvironmentError, FidelityError
 from .model import ArtifactRecord, Finding, JobReport, Severity, Verdict
+from .offline import offline_policy
 from .ooxml import PptxPackage
 from .pdf_pipeline import PdfPatchResult, restore_pdf_images
 from .powerpoint import export_reference, probe
@@ -64,6 +65,7 @@ def doctor(
         "python": {"executable": sys.executable, "version": sys.version.split()[0]},
         "executables": {},
         "powerpoint": None,
+        "networkPolicy": offline_policy(),
         "ok": True,
         "errors": [],
     }

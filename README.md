@@ -66,6 +66,8 @@ Set `behavior.dryRun` to `true` to validate the request, PPTX package and slide 
 
 Machine commands keep stdout to one strict JSON document. Output accidentally written by PowerPoint helpers, renderers, warnings, or native libraries is discarded; stderr receives only a small JSON summary with byte counts. Error text is redacted before serialization. `diagnose --out` is the exception: it writes the result to the named file and leaves stdout empty. See [docs/machine-output-contract.md](docs/machine-output-contract.md) for the command matrix and trust boundary.
 
+SlideGuard is offline-only by default. It contains no telemetry, automatic upload or update-check path, and every runtime entry point uses the same policy. A PPTX with any external OOXML relationship is rejected before PowerPoint opens it; exported SVG also rejects external resources. `slideguard doctor --json` records the policy in `networkPolicy`, and CI runs a static dependency/source audit plus socket-denial tests. See [docs/zero-egress-contract.md](docs/zero-egress-contract.md) for the exact boundary and reproducible checks.
+
 The batch entry accepts 1 to 100 independent requests and keeps output in input order. Its default `continue` strategy isolates a bad job and runs the rest. `fail-fast` leaves explicit skipped records. Safe reuse needs both the same source SHA-256 and the same normalized configuration; SlideGuard checks the published manifest, artifact hashes and `checksums.sha256` before returning a cached result. See [examples/batch-request.json](examples/batch-request.json) for a complete request.
 
 To crop like PowerPoint, give the four boundary positions as percentages of the slide. This keeps the area from 5% to 95% horizontally and 3% to 97% vertically:

@@ -84,3 +84,20 @@ def test_rejects_dtd_even_when_entities_are_not_resolved(tmp_path: Path):
     path = _deck(tmp_path / "dtd.pptx", presentation=presentation)
     with pytest.raises(InputError, match="must not declare DTDs"):
         PptxPackage.open(path)
+
+
+def test_rejects_external_relationships_before_powerpoint_can_open_the_deck(tmp_path: Path):
+    rels = RELS.replace(
+        b"</Relationships>",
+        b'<Relationship Id="external1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="https://example.invalid/tracker.png" TargetMode="External"/></Relationships>',
+    )
+    path = _deck(tmp_path / "external.pptx", rels=rels)
+
+    with pytest.raises(InputError, match="offline export refuses") as caught:
+        PptxPackage.open(path)
+
+    assert caught.value.stage == "offline-preflight"
+    assert caught.value.details == {
+        "externalRelationshipCount": 1,
+        "relationshipTypes": ["image"],
+    }

@@ -2,6 +2,8 @@
 
 Status: development contract for `v0.2.0-beta.1`.
 
+SlideGuard's runtime network mode is `offline-only`. Telemetry, automatic uploads and update checks are disabled by construction rather than by a user preference. `doctor --json` and locally generated diagnostic bundles publish this policy as machine-readable metadata. The reproducible source, dependency and runtime checks are specified in [zero-egress-contract.md](zero-egress-contract.md).
+
 SlideGuard keeps full local paths in its normal machine result because the desktop UI and local automation need to open the source and published package. That result is local data. Do not attach it unchanged to a GitHub issue, Linear issue, email or public bug report.
 
 Use `redact_for_sharing` before creating a diagnostic attachment. It returns a new structure and does not change the local object.

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
 from . import PIPELINE_REVISION, __version__
+from .offline import offline_policy
 from .contracts import validate_document
 from .errors import InputError
 
@@ -410,6 +411,7 @@ def build_diagnostic_bundle(
             "privacyPasses": 2,
             "secretScan": "passed",
             "maxBytes": max_bytes,
+            "networkPolicy": offline_policy(),
         },
     }
     final_bundle = _redact_or_reject(hooks.redact, bundle, pass_name="post-package")

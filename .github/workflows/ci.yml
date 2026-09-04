@@ -20,4 +20,5 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[qa,dev]"
+      - run: python scripts/audit_zero_egress.py
       - run: python -m pytest -q tests

@@ -82,6 +82,31 @@ def _read_xml(archive: zipfile.ZipFile, name: str) -> etree._Element:
     return _parse(archive.read(entry))
 
 
+def _reject_external_relationships(archive: zipfile.ZipFile) -> None:
+    """Fail before PowerPoint can open a package that references remote content."""
+    relationship_types: set[str] = set()
+    count = 0
+    for entry in archive.infolist():
+        if entry.is_dir() or not entry.filename.casefold().endswith(".rels"):
+            continue
+        relationships = _read_xml(archive, entry.filename)
+        for relationship in relationships.xpath("//pr:Relationship", namespaces=NS):
+            if str(relationship.get("TargetMode", "")).casefold() != "external":
+                continue
+            count += 1
+            relation_type = str(relationship.get("Type", "unknown")).rstrip("/").rsplit("/", 1)[-1]
+            relationship_types.add(relation_type[:80] or "unknown")
+    if count:
+        raise InputError(
+            "PPTX contains external relationships; offline export refuses to open it in PowerPoint",
+            stage="offline-preflight",
+            details={
+                "externalRelationshipCount": count,
+                "relationshipTypes": sorted(relationship_types, key=str.casefold),
+            },
+        )
+
+
 def _rels_part(part: str) -> str:
     path = PurePosixPath(part)
     return str(path.parent / "_rels" / f"{path.name}.rels")
@@ -128,6 +153,7 @@ class PptxPackage:
         try:
             with zipfile.ZipFile(path) as archive:
                 _validate_archive(archive)
+                _reject_external_relationships(archive)
                 presentation = _read_xml(archive, "ppt/presentation.xml")
                 rels = _read_xml(archive, "ppt/_rels/presentation.xml.rels")
                 relmap = {rel.get("Id"): rel.get("Target") for rel in rels.xpath("//pr:Relationship", namespaces=NS)}

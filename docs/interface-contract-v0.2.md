@@ -40,6 +40,10 @@ Crop coordinates are percentages of the complete slide, with the origin at the u
 
 Expansion is applied after the manual or automatic content rectangle. Left and right expansion percentages use the selected rectangle's width; top and bottom use its height. Expansion is clamped to the slide. `paddingPx` is applied last in reference-render pixels. A UI preview must use this same normalized model and must not treat display pixels as export pixels.
 
+The desktop UI keeps one local `CropSpec` for each edited page. Built-in presets, named custom presets and page-to-page copying replace that whole value; they do not patch a private export option. At export time `CropSpec` becomes the existing `ExportRequest.crop` object. Automatic mode omits `boundsPercent`, as required by the public request schema.
+
+GUI drafts are local recovery data, not a new export API. Draft schema 2 adds `pageCrops` and keeps the active editor state. The reader accepts schema 1 and assigns its single crop to the saved active page; the next save writes schema 2. Custom presets use their own schema 1 file and contain only a name, an ID and `CropSpec`.
+
 ## Configuration fingerprint
 
 `configFingerprint` is SHA-256 over normalized values that can change the produced content or its QA. It includes the effective slide numbers, crop, image-quality budgets, validation scales and pipeline revision. It excludes `taskId`, `outputRoot`, strict publication behavior, dry-run and progress settings. Consequently, moving an otherwise identical job to another output folder does not change its content fingerprint.
@@ -70,6 +74,9 @@ The authoritative schema files are shipped in `src/slideguard/schemas/`:
 - `batch-result.schema.json`
 - `job-state.schema.json`
 - `resume-plan.schema.json`
+- `gui-crop-spec.schema.json`
+- `gui-draft.schema.json`
+- `gui-crop-presets.schema.json`
 
 ## Compatibility
 

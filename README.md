@@ -50,7 +50,7 @@ py -m pip install -e ".[qa,gui]"
 slideguard gui
 ```
 
-Open or drag in a PPTX, select the page, drag any of the four edges or four corners, and set each expansion edge independently. The blue line is the manual crop; the green dashed line is the effective output after expansion and fixed reference-pixel padding. The visual interface calls the same application service as the JSON entry point. Safe mid-export cancellation and the installer remain release blockers and are not represented as finished features.
+Open or drag in a PPTX, select the page, drag any of the four edges or four corners, and set each expansion edge independently. The blue line is the manual crop; the green dashed line is the effective output after expansion and fixed reference-pixel padding. Built-in choices cover tight crop, a 2% paper-safe margin plus 16 reference pixels, and the full page. You can save a named custom preset, keep a different crop on each page, or copy the current page's crop to a page range such as `2,4-6`. Every one of these controls writes the same `CropSpec`, which the visual interface passes to the same application service as the JSON entry point. See [docs/gui-crop-presets.md](docs/gui-crop-presets.md) for the stored formats and exact values. Safe mid-export cancellation and the installer remain release blockers and are not represented as finished features.
 
 SlideGuard serializes its own PowerPoint workers. If PowerPoint is already open, the worker does not quit that process: it opens the requested file read-only without a window, closes only that copy, and restores the previous automation-security setting. Mid-call timeout recovery still requires the Office runner gate before beta release.
 

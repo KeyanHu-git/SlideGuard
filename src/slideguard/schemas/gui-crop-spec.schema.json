@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/KeyanHu-git/SlideGuard/schemas/gui-crop-spec-1.json",
+  "title": "SlideGuard GUI CropSpec 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mode", "boundsPercent", "expandPercent", "paddingPx"],
+  "properties": {
+    "mode": {"enum": ["auto", "manual"]},
+    "boundsPercent": {"$ref": "#/$defs/edges"},
+    "expandPercent": {"$ref": "#/$defs/edges"},
+    "paddingPx": {"type": "integer", "minimum": 0, "maximum": 100000}
+  },
+  "$defs": {
+    "edges": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["left", "top", "right", "bottom"],
+      "properties": {
+        "left": {"type": "number", "minimum": 0, "maximum": 100},
+        "top": {"type": "number", "minimum": 0, "maximum": 100},
+        "right": {"type": "number", "minimum": 0, "maximum": 100},
+        "bottom": {"type": "number", "minimum": 0, "maximum": 100}
+      }
+    }
+  }
+}

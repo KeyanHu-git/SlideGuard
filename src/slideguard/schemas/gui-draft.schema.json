@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/KeyanHu-git/SlideGuard/schemas/gui-draft-2.json",
+  "title": "SlideGuard GUI draft 2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["draftSchemaVersion", "sourcePath", "sourceSha256", "activeSlide", "editor", "pageCrops"],
+  "properties": {
+    "draftSchemaVersion": {"const": 2},
+    "sourcePath": {"type": "string"},
+    "sourceSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "activeSlide": {"type": "integer", "minimum": 1},
+    "editor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["crop", "limitMb"],
+      "properties": {
+        "crop": {"$ref": "https://github.com/KeyanHu-git/SlideGuard/schemas/gui-crop-spec-1.json"},
+        "limitMb": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "pageCrops": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[1-9][0-9]*$"},
+      "additionalProperties": {"$ref": "https://github.com/KeyanHu-git/SlideGuard/schemas/gui-crop-spec-1.json"}
+    }
+  }
+}

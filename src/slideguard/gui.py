@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -41,11 +42,21 @@ from .application import ExportService
 from .cancellation import CancellationToken
 from .errors import InputError
 from .geometry import NormalizedRect, effective_pixel_box, move_normalized_rect, resize_normalized_rect
-from .gui_state import EditHistory, EditorState, GuiDraft, GuiDraftStore
+from .gui_state import (
+    BUILT_IN_CROP_PRESETS,
+    CropPreset,
+    CropPresetStore,
+    CropSpec,
+    EditHistory,
+    EditorState,
+    GuiDraft,
+    GuiDraftStore,
+    PageCropAssignments,
+)
 from .ooxml import PptxPackage
 from .powerpoint import preview_reference
 from .resume import ResumePlanningService
-from .util import default_work_root, sha256_file
+from .util import default_work_root, parse_slides, sha256_file
 from .workspace import (
     OwnedWorkspace,
     create_owned_workspace,
@@ -399,6 +410,10 @@ class SlideGuardWindow(QMainWindow):
         self._gesture_active = False
         self._history: EditHistory | None = None
         self._draft_store = GuiDraftStore(default_work_root().parent / "gui-drafts")
+        self._preset_store = CropPresetStore(default_work_root().parent / "gui-crop-presets.json")
+        self._custom_presets = self._preset_store.load()
+        self._page_crops = PageCropAssignments()
+        self._active_slide = 1
         self._draft_dirty = False
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
@@ -409,6 +424,8 @@ class SlideGuardWindow(QMainWindow):
         self._draft_timer.setInterval(300)
         self._draft_timer.timeout.connect(self._save_draft)
         self._build_ui()
+        self._default_crop = self._capture_crop_spec()
+        self._page_crops.save(1, self._default_crop)
         self._history = EditHistory(self._capture_editor_state())
         self._history_suspended = False
         self._update_history_actions()
@@ -445,6 +462,15 @@ class SlideGuardWindow(QMainWindow):
         self.slide_spin.valueChanged.connect(self._slide_changed)
         form.addRow("页面", self.slide_spin)
 
+        copy_pages_row = QHBoxLayout()
+        self.copy_pages_edit = QLineEdit()
+        self.copy_pages_edit.setPlaceholderText("例如 2,4-6")
+        copy_pages_button = QPushButton("复制当前页")
+        copy_pages_button.clicked.connect(self._copy_crop_to_pages)
+        copy_pages_row.addWidget(self.copy_pages_edit, 1)
+        copy_pages_row.addWidget(copy_pages_button)
+        form.addRow("复制到页", copy_pages_row)
+
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("手动裁剪", "manual")
         self.mode_combo.addItem("自动紧边", "auto")
@@ -453,15 +479,24 @@ class SlideGuardWindow(QMainWindow):
 
         crop_preset_row = QHBoxLayout()
         self.crop_preset_combo = QComboBox()
-        self.crop_preset_combo.addItem("整页", (0.0, 0.0, 100.0, 100.0))
-        self.crop_preset_combo.addItem("四周裁掉 2%", (2.0, 2.0, 98.0, 98.0))
-        self.crop_preset_combo.addItem("四周裁掉 5%", (5.0, 5.0, 95.0, 95.0))
-        self.crop_preset_combo.addItem("四周裁掉 10%", (10.0, 10.0, 90.0, 90.0))
+        for preset in (*BUILT_IN_CROP_PRESETS, *self._custom_presets):
+            self.crop_preset_combo.addItem(preset.name, preset.preset_id)
         crop_preset_button = QPushButton("应用")
         crop_preset_button.clicked.connect(self._apply_crop_preset)
         crop_preset_row.addWidget(self.crop_preset_combo, 1)
         crop_preset_row.addWidget(crop_preset_button)
         form.addRow("裁剪预设", crop_preset_row)
+
+        preset_actions = QHBoxLayout()
+        save_preset_button = QPushButton("保存自定义…")
+        save_preset_button.clicked.connect(self._save_custom_preset)
+        self.delete_preset_button = QPushButton("删除自定义预设")
+        self.delete_preset_button.clicked.connect(self._delete_custom_preset)
+        self.crop_preset_combo.currentIndexChanged.connect(self._update_preset_actions)
+        preset_actions.addWidget(save_preset_button)
+        preset_actions.addWidget(self.delete_preset_button)
+        form.addRow("预设管理", preset_actions)
+        self._update_preset_actions()
 
         self.bound_spins: dict[str, QDoubleSpinBox] = {}
         for name, label, value in (
@@ -594,8 +629,16 @@ class SlideGuardWindow(QMainWindow):
             self._source = None
             return
         self._history_suspended = True
+        current_limit = self.limit_spin.value()
+        self._page_crops = PageCropAssignments()
+        self._active_slide = 1
         self.file_edit.setText(str(self._source))
+        self.slide_spin.blockSignals(True)
         self.slide_spin.setRange(1, package.slide_count)
+        self.slide_spin.setValue(1)
+        self.slide_spin.blockSignals(False)
+        self._apply_editor_state(EditorState(self._default_crop, current_limit), record=False)
+        self._page_crops.save(1, self._default_crop)
         self.output_edit.setText(str(self._source.parent / "slideguard-output"))
         self._restore_draft_if_available(package.slide_count)
         if self._history:
@@ -605,7 +648,21 @@ class SlideGuardWindow(QMainWindow):
         self.export_button.setEnabled(True)
         self._schedule_preview()
 
-    def _slide_changed(self) -> None:
+    def _slide_changed(self, slide: int) -> None:
+        if slide != self._active_slide:
+            current = self._capture_editor_state()
+            self._page_crops.save(self._active_slide, current.crop)
+            target = self._page_crops.get(slide, self._default_crop)
+            self._active_slide = slide
+            previous = self._history_suspended
+            self._history_suspended = True
+            try:
+                self._apply_editor_state(EditorState(target, current.limit_mb), record=False)
+            finally:
+                self._history_suspended = previous
+            if self._history:
+                self._history.reset(self._capture_editor_state())
+                self._update_history_actions()
         self._schedule_preview()
         self._schedule_draft_save()
 
@@ -733,14 +790,16 @@ class SlideGuardWindow(QMainWindow):
                 self.status.setText("自动紧边将在最终 4000 像素参考图上计算")
         self._record_editor_state()
 
-    def _capture_editor_state(self) -> EditorState:
-        return EditorState(
+    def _capture_crop_spec(self) -> CropSpec:
+        return CropSpec(
             mode=str(self.mode_combo.currentData()),
             bounds_percent=tuple(spin.value() for spin in self.bound_spins.values()),
             expand_percent=tuple(spin.value() for spin in self.expand_spins.values()),
             padding_px=self.padding_spin.value(),
-            limit_mb=self.limit_spin.value(),
         )
+
+    def _capture_editor_state(self) -> EditorState:
+        return EditorState(crop=self._capture_crop_spec(), limit_mb=self.limit_spin.value())
 
     def _apply_editor_state(self, state: EditorState, *, record: bool) -> None:
         widgets = [
@@ -780,6 +839,8 @@ class SlideGuardWindow(QMainWindow):
         except (InputError, TypeError, ValueError):
             return
         self._history.record(state)
+        if self._source:
+            self._page_crops.save(self._active_slide, state.crop)
         self._update_history_actions()
         self._schedule_draft_save()
 
@@ -807,34 +868,100 @@ class SlideGuardWindow(QMainWindow):
         self._update_history_actions()
 
     def _apply_crop_preset(self) -> None:
-        bounds = self.crop_preset_combo.currentData()
-        if not bounds:
+        preset_id = self.crop_preset_combo.currentData()
+        preset = self._preset_by_id(str(preset_id))
+        if not preset:
             return
         current = self._capture_editor_state()
         self._apply_editor_state(
-            EditorState(
-                mode="manual",
-                bounds_percent=tuple(bounds),
-                expand_percent=current.expand_percent,
-                padding_px=current.padding_px,
-                limit_mb=current.limit_mb,
-            ),
+            EditorState(crop=preset.crop, limit_mb=current.limit_mb),
             record=True,
         )
+        self.status.setText(f"已在第 {self._active_slide} 页应用预设：{preset.name}")
 
     def _apply_expand_preset(self) -> None:
         value = float(self.expand_preset_combo.currentData())
         current = self._capture_editor_state()
         self._apply_editor_state(
             EditorState(
-                mode=current.mode,
-                bounds_percent=current.bounds_percent,
-                expand_percent=(value, value, value, value),
-                padding_px=current.padding_px,
+                crop=CropSpec(
+                    mode=current.mode,
+                    bounds_percent=current.bounds_percent,
+                    expand_percent=(value, value, value, value),
+                    padding_px=current.padding_px,
+                ),
                 limit_mb=current.limit_mb,
             ),
             record=True,
         )
+
+    def _preset_by_id(self, preset_id: str) -> CropPreset | None:
+        return next(
+            (item for item in (*BUILT_IN_CROP_PRESETS, *self._custom_presets) if item.preset_id == preset_id),
+            None,
+        )
+
+    def _refresh_crop_presets(self, selected_id: str | None = None) -> None:
+        self._custom_presets = self._preset_store.load()
+        self.crop_preset_combo.blockSignals(True)
+        try:
+            self.crop_preset_combo.clear()
+            for preset in (*BUILT_IN_CROP_PRESETS, *self._custom_presets):
+                self.crop_preset_combo.addItem(preset.name, preset.preset_id)
+            if selected_id:
+                index = self.crop_preset_combo.findData(selected_id)
+                if index >= 0:
+                    self.crop_preset_combo.setCurrentIndex(index)
+        finally:
+            self.crop_preset_combo.blockSignals(False)
+        self._update_preset_actions()
+
+    def _save_custom_preset(self) -> None:
+        name, accepted = QInputDialog.getText(self, "保存自定义预设", "预设名称")
+        if not accepted:
+            return
+        try:
+            preset = self._preset_store.save(name, self._capture_crop_spec())
+        except (OSError, TypeError, ValueError) as exc:
+            self.status.setText(f"无法保存预设：{exc}")
+            return
+        self._refresh_crop_presets(preset.preset_id)
+        self.status.setText(f"已保存自定义预设：{preset.name}")
+
+    def _delete_custom_preset(self) -> None:
+        preset_id = str(self.crop_preset_combo.currentData())
+        preset = self._preset_by_id(preset_id)
+        if not preset or preset.built_in:
+            return
+        try:
+            deleted = self._preset_store.delete(preset_id)
+        except OSError as exc:
+            self.status.setText(f"无法删除预设：{exc}")
+            return
+        if deleted:
+            self._refresh_crop_presets()
+            self.status.setText(f"已删除自定义预设：{preset.name}")
+
+    def _update_preset_actions(self) -> None:
+        if not hasattr(self, "delete_preset_button"):
+            return
+        preset = self._preset_by_id(str(self.crop_preset_combo.currentData()))
+        self.delete_preset_button.setEnabled(bool(preset and not preset.built_in))
+
+    def _copy_crop_to_pages(self) -> None:
+        if not self._source:
+            return
+        try:
+            pages = parse_slides(self.copy_pages_edit.text(), self.slide_spin.maximum())
+        except InputError as exc:
+            self.status.setText(f"复制页码无效：{exc}")
+            return
+        current = self._capture_crop_spec()
+        self._page_crops.save(self._active_slide, current)
+        copied = self._page_crops.copy(self._active_slide, pages)
+        self._schedule_draft_save()
+        page_text = ", ".join(str(page) for page in copied)
+        self.status.setText(f"已把第 {self._active_slide} 页裁剪设置复制到：{page_text}")
 
     def _schedule_draft_save(self) -> None:
         if self._source_sha and not self._history_suspended:
@@ -845,11 +972,14 @@ class SlideGuardWindow(QMainWindow):
         if not self._source or not self._source_sha:
             return
         try:
+            editor = self._capture_editor_state()
+            self._page_crops.save(self._active_slide, editor.crop)
             draft = GuiDraft(
                 source_path=str(self._source),
                 source_sha256=self._source_sha,
-                slide=self.slide_spin.value(),
-                editor=self._capture_editor_state(),
+                slide=self._active_slide,
+                editor=editor,
+                page_crops=self._page_crops.items(),
             )
             self._draft_store.save(draft)
             self._draft_dirty = False
@@ -871,8 +1001,15 @@ class SlideGuardWindow(QMainWindow):
             QMessageBox.StandardButton.Yes,
         )
         if answer == QMessageBox.StandardButton.Yes:
-            self.slide_spin.setValue(min(slide_count, draft.slide))
+            self._page_crops = PageCropAssignments(
+                (slide, crop) for slide, crop in draft.page_crops if slide <= slide_count
+            )
+            self._active_slide = min(slide_count, draft.slide)
+            self.slide_spin.blockSignals(True)
+            self.slide_spin.setValue(self._active_slide)
+            self.slide_spin.blockSignals(False)
             self._apply_editor_state(draft.editor, record=False)
+            self._page_crops.save(self._active_slide, draft.editor.crop)
             self.status.setText("已恢复上次异常退出前的裁剪草稿")
         else:
             self._draft_store.discard(self._source_sha)
@@ -898,14 +1035,7 @@ class SlideGuardWindow(QMainWindow):
 
     def _request_document(self) -> dict[str, Any]:
         assert self._source is not None
-        mode = self.mode_combo.currentData()
-        crop: dict[str, Any] = {
-            "mode": mode,
-            "expandPercent": {name: spin.value() for name, spin in self.expand_spins.items()},
-            "paddingPx": self.padding_spin.value(),
-        }
-        if mode == "manual":
-            crop["boundsPercent"] = {name: spin.value() for name, spin in self.bound_spins.items()}
+        crop = self._capture_crop_spec().to_request_document()
         byte_limit = int(self.limit_spin.value() * 1_000_000)
         return {
             "schemaVersion": "1.0",

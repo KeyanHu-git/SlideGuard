@@ -489,8 +489,15 @@ class SlideGuardWindow(QMainWindow):
         self.redo_alternate_shortcut = QShortcut(QKeySequence("Ctrl+Shift+Z"), self)
         self.redo_alternate_shortcut.activated.connect(self._redo)
 
-        panel_layout.addWidget(QLabel("蓝线：手动裁剪框    绿虚线：扩展与安全边后的实际输出框"))
-        panel_layout.addWidget(QLabel("选中预览后，方向键移动 1 个参考像素；Shift + 方向键移动 10 个。"))
+        boundary_note = QLabel("蓝线：手动裁剪框    绿虚线：扩展与安全边后的实际输出框")
+        boundary_note.setWordWrap(True)
+        panel_layout.addWidget(boundary_note)
+        keyboard_note = QLabel(
+            "选中预览后，方向键移动 1 个参考像素，Shift + 方向键移动 10 个；"
+            "Enter 提交，Esc 放弃本次按键调整。"
+        )
+        keyboard_note.setWordWrap(True)
+        panel_layout.addWidget(keyboard_note)
         note = QLabel("PPT 里的 PNG/JPEG 会保留原始像素，但不会被伪装成矢量路径。最终 SVG 画布透明；真实白色图形仍保留。")
         note.setWordWrap(True)
         panel_layout.addWidget(note)

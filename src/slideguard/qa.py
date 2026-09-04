@@ -12,6 +12,7 @@ from pypdf import PdfReader, PdfWriter
 from pypdf.generic import RectangleObject
 
 from .model import FeatureInventory, Finding, Severity, Verdict
+from .svg_security import parse_svg, security_violations
 from .render import render_pdf, render_svg
 
 
@@ -80,8 +81,7 @@ def validate_pdf_structure(
 
 def validate_svg_structure(svg: Path, inventory: FeatureInventory) -> list[Finding]:
     findings: list[Finding] = []
-    parser = etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=True)
-    tree = etree.parse(str(svg), parser)
+    tree = parse_svg(svg)
     root = tree.getroot()
     local = etree.QName(root).localname
     viewbox = root.get("viewBox", "").replace(",", " ").split()
@@ -91,16 +91,7 @@ def validate_svg_structure(svg: Path, inventory: FeatureInventory) -> list[Findi
         "SVG parses and has a positive viewBox" if valid_viewbox else "SVG root/viewBox is invalid",
         "svg-structure@1.0", slide=inventory.slide,
     ))
-    external = []
-    for element in tree.iter():
-        for name, value in element.attrib.items():
-            local_name = etree.QName(name).localname
-            if local_name == "href" and not (value.startswith("data:") or value.startswith("#")):
-                external.append(value)
-            if local_name.lower().startswith("on"):
-                external.append(f"event:{local_name}")
-        if etree.QName(element).localname == "script":
-            external.append("script")
+    external = security_violations(tree)
     findings.append(_finding(
         "SEC_SVG_EXTERNAL_RESOURCE", not external,
         "SVG is self-contained and script-free" if not external else f"External/script references: {external[:3]}",
@@ -145,8 +136,7 @@ def validate_svg_structure(svg: Path, inventory: FeatureInventory) -> list[Findi
 
 
 def _svg_vector_hash(svg: Path) -> str:
-    parser = etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=True, remove_blank_text=True)
-    tree = etree.parse(str(svg), parser)
+    tree = parse_svg(svg)
     root = tree.getroot()
     viewbox = root.get("viewBox", "0 0 0 0").replace(",", " ").split()
     vx, vy, vw, vh = map(float, viewbox) if len(viewbox) == 4 else (0, 0, 0, 0)

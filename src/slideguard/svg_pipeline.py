@@ -11,6 +11,7 @@ from PIL import Image
 from .image_match import best_candidate, crop_native, resize_limit
 from .crop import PercentBox, crop_pixels, svg_box
 from .ooxml import PptxPackage
+from .svg_security import parse_svg, security_violations
 from .util import require_executable, run_checked
 
 
@@ -72,7 +73,10 @@ def restore_svg_images(
     crop_percent: PercentBox | None = None,
     expand_percent: PercentBox = (0.0, 0.0, 0.0, 0.0),
 ) -> SvgPatchResult:
-    tree = etree.parse(str(source_svg), etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=True))
+    tree = parse_svg(source_svg)
+    violations = security_violations(tree)
+    if violations:
+        raise RuntimeError(f"PowerPoint SVG violates the local-resource policy: {violations[:3]}")
     root = tree.getroot()
     view_box = [float(value) for value in root.get("viewBox").replace(",", " ").split()]
     vx, vy, vw, vh = view_box

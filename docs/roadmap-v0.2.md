@@ -68,7 +68,7 @@ L2 为 KEY-60。桌面端采用可选 PySide6 依赖，核心包不导入 Qt。
 
 - KEY-98、KEY-150：键盘微调、提交和撤销。
 - KEY-145：紧边、论文安全边距和自定义预设。
-- KEY-147：不误伤用户 PowerPoint 的安全取消。
+- KEY-147：已加入 nonce 状态握手、协作式取消和有证据约束的单 PID 清理；GUI 的取消按钮与页面循环检查仍待完成。
 - KEY-148、KEY-149：GUI 草稿和导出检查点恢复。
 - KEY-151、KEY-152：100/125/150/200% DPI 与跨屏真机矩阵。
 - KEY-141：带缩略图的页面列表；当前 MVP 为页码选择器。
@@ -114,4 +114,5 @@ L2 为 KEY-62 和 KEY-63。
 - wheel：可构建；JSON Schema、GUI、应用服务和 PowerPoint worker 已进入包。
 - 真实稿件：`AAAI_frame_draw_final1.pptx` 第一页 dry-run 通过；PowerPoint 预览模式生成 1600 × 900 PNG。
 - PowerPoint 会话：独立 worker 会在结束后退出；PowerPoint 已打开时复用当前 COM 会话，但只打开并关闭 SlideGuard 的只读隐藏副本，恢复 AutomationSecurity，不退出用户进程。临时未保存演示文稿的数量、活动文稿和安全设置前后保持不变。
+- 超时清理：worker 会在 COM 调用前写入 nonce 状态并轮询取消令牌。只有当前 worker 证明归属的自动化 PID 才能进入精确清理；既有或归属不明的 PowerPoint 不会被结束，错误结果会标明后台收尾风险。
 - 未发布：当前结果是开发中间态，不是 beta 或 GA。

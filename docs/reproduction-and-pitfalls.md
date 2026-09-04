@@ -78,7 +78,17 @@ Fix: on Windows, render SVG evidence with installed Edge or Chrome in headless m
 
 Proof: composite the transparent browser render on white and compare it with PowerPoint's own white reference at 640, 1600 and 3840 px.
 
-## 11. Publishing succeeds locally but fails in a deep OneDrive folder
+## 11. A timed-out COM call can outlive the Python request
+
+Cause: PowerPoint export is a blocking COM call. Stopping the Python or PowerShell caller does not prove that the PowerPoint process belongs to SlideGuard, and ending every `POWERPNT.EXE` process can destroy a user's unsaved work.
+
+Fix: every worker writes an early nonce-bound status file. A PowerPoint PID is treated as SlideGuard-owned only when it was absent before COM activation, started inside that activation window, uses Office's `/AUTOMATION -Embedding` command line, and is the only matching new process. On timeout, SlideGuard writes a cancellation token and waits briefly. If the worker used an existing or unproven session, it remains alive long enough to close SlideGuard's hidden read-only presentation after the blocking call returns. SlideGuard does not stop that PowerPoint process.
+
+Forced cleanup is limited to a PID from a valid current-worker handshake. A second script checks the PID, start time, process name and recorded identity method immediately before calling `Stop-Process -Id`. Name-based process termination is forbidden. The timeout error records whether cleanup completed and whether a worker may still be finishing in the background.
+
+Proof: run the ownership fault tests in `tests/test_powerpoint.py`, then run a real `probe` once with PowerPoint closed and once while a user session is open. The first run must leave no PowerPoint process. The second must preserve the original PID.
+
+## 12. Publishing succeeds locally but fails in a deep OneDrive folder
 
 Symptoms: QA passes, but copying a few long-named evidence files reports `WinError 3` or appears missing during package verification.
 
@@ -86,7 +96,7 @@ Cause: the final path exceeds the legacy Win32 `MAX_PATH` boundary even though P
 
 Fix: use a short atomic staging name and Win32 extended-length paths for publication, existence checks and checksum reads. Do not shorten or silently omit evidence filenames.
 
-## 12. Tests pass locally but fail on a clean GitHub runner
+## 13. Tests pass locally but fail on a clean GitHub runner
 
 Symptoms: tests using pytest's `tmp_path` fail before setup because `.tmp/pytest` cannot be created.
 

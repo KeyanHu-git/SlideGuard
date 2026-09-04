@@ -8,6 +8,12 @@
   "properties": {
     "schemaVersion": {"const": "1.0"},
     "taskId": {"type": "string", "minLength": 1, "maxLength": 200},
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
     "input": {"type": "string", "minLength": 1},
     "slides": {"type": "string", "minLength": 1, "maxLength": 4096, "default": "1"},
     "outputRoot": {"type": "string", "minLength": 1},

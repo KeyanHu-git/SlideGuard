@@ -144,7 +144,7 @@ def validate_document(document: Any, schema_name: str) -> None:
 
 def _deep_defaults(document: dict[str, Any]) -> dict[str, Any]:
     result = copy.deepcopy(DEFAULT_REQUEST)
-    for key in ("schemaVersion", "taskId", "input", "slides", "outputRoot"):
+    for key in ("schemaVersion", "taskId", "idempotencyKey", "input", "slides", "outputRoot"):
         if key in document:
             result[key] = document[key]
     for group in ("crop", "quality", "behavior"):

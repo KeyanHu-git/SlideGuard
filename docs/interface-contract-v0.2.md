@@ -17,6 +17,23 @@ The first form resolves relative input and output paths from the request file's 
 
 `slideguard export --json ...` is a convenience adapter for the same contract. The original `slideguard export ...` text output remains available for v0.1 users.
 
+## Ordered batches
+
+Use a `BatchRequest` when one caller needs several independent exports:
+
+```powershell
+slideguard batch batch-request.json
+Get-Content batch-request.json -Raw | slideguard batch -
+```
+
+A batch contains 1 to 100 jobs. Each entry is checked as an `ExportRequest` when its turn starts, so one malformed job does not reject the other jobs. `results[n].itemIndex` is always `n`; the runner never reorders output.
+
+`behavior.strategy` defaults to `continue`. It runs every job and returns `succeeded`, `partial` or `failed` from the child results. `fail-fast` stops after the first non-zero child result and adds an explicit `skipped` entry for every remaining job. The process exit code is zero only when every job succeeds or validates. Otherwise it is the largest child exit code; skipped entries do not invent another error code.
+
+Retries are deliberately narrow. `maxAttempts` is 1 to 3 and `retryDelayMs` is 0 to 10,000 ms. SlideGuard retries only an environment or export failure that carries `details.transient: true`, or a failure whose stage is `powerpoint-timeout` or `external-process-timeout`. Input, size-budget, fidelity, idempotency and internal failures are never retried automatically. Each item records `attempts` and an `attemptLog` entry for every run.
+
+An optional `idempotencyKey` may contain ASCII letters, digits, dots, underscores, colons and hyphens. Without one, SlideGuard derives a SHA-256 key from the source SHA-256, normalized content configuration and pipeline revision. A published result is reused only after SlideGuard checks the key binding, output-root boundary, manifest identity, every returned artifact's byte count and SHA-256, and every line in `checksums.sha256`. A caller-supplied key bound to different content returns `IDEMPOTENCY_CONFLICT` with exit code 31. If an old package is damaged, SlideGuard keeps it for inspection and writes the new run under a separate directory.
+
 ## Crop semantics
 
 Crop coordinates are percentages of the complete slide, with the origin at the upper-left. A manual rectangle must satisfy `0 <= left < right <= 100` and `0 <= top < bottom <= 100`.
@@ -49,6 +66,8 @@ The authoritative schema files are shipped in `src/slideguard/schemas/`:
 - `export-result.schema.json`
 - `error.schema.json`
 - `progress-event.schema.json`
+- `batch-request.schema.json`
+- `batch-result.schema.json`
 
 ## Compatibility
 

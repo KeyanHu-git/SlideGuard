@@ -9,6 +9,7 @@ from typing import Any
 
 from . import __version__
 from .application import ExportService
+from .batch import BatchService, batch_emergency_result, batch_failed_result
 from .contracts import emergency_result, failed_result, load_request
 from .engine import ExportOptions, doctor, export_job
 from .errors import EnvironmentError, InputError, SlideGuardError
@@ -84,6 +85,9 @@ def build_parser() -> argparse.ArgumentParser:
     job_parser = sub.add_parser("job", help="Run a versioned JSON request from a UTF-8 file or stdin")
     job_parser.add_argument("request", nargs="?", default="-", help="Request JSON path, or - for stdin")
 
+    batch_parser = sub.add_parser("batch", help="Run an ordered batch JSON request from a UTF-8 file or stdin")
+    batch_parser.add_argument("request", nargs="?", default="-", help="Batch request JSON path, or - for stdin")
+
     gui_parser = sub.add_parser("gui", help="Open the visual crop and export window")
     gui_parser.add_argument("input", nargs="?", type=Path, default=None)
 
@@ -94,12 +98,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _print_json(document: dict[str, Any], *, stream: Any | None = None) -> None:
+def _print_json(
+    document: dict[str, Any],
+    *,
+    stream: Any | None = None,
+    fallback: Any = emergency_result,
+) -> None:
     destination = stream or sys.stdout
     try:
         payload = json.dumps(document, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
     except (TypeError, ValueError) as exc:
-        payload = json.dumps(emergency_result(exc), ensure_ascii=True, allow_nan=False, separators=(",", ":"))
+        payload = json.dumps(fallback(exc), ensure_ascii=True, allow_nan=False, separators=(",", ":"))
     print(payload, file=destination, flush=True)
 
 
@@ -128,6 +137,16 @@ def _run_machine(document: dict[str, Any], *, base_dir: Path) -> int:
     except Exception as exc:
         result = _safe_failure(exc)
     _print_json(result)
+    return int(result["exitCode"])
+
+
+def _run_batch(document: dict[str, Any], *, base_dir: Path) -> int:
+    sink = lambda event: _print_json(event, stream=sys.stderr)
+    try:
+        result = BatchService().execute(document, base_dir=base_dir, event_sink=sink)
+    except Exception as exc:
+        result = batch_emergency_result(exc)
+    _print_json(result, fallback=batch_emergency_result)
     return int(result["exitCode"])
 
 
@@ -169,14 +188,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     machine_hint = bool(raw_argv) and (
-        raw_argv[0] == "job" or (raw_argv[0] == "export" and "--json" in raw_argv)
+        raw_argv[0] in {"job", "batch"} or (raw_argv[0] == "export" and "--json" in raw_argv)
     )
     try:
         args = parser.parse_args(raw_argv)
     except InputError as exc:
         if machine_hint:
-            result = _safe_failure(exc)
-            _print_json(result)
+            is_batch = bool(raw_argv) and raw_argv[0] == "batch"
+            result = batch_failed_result(exc) if is_batch else _safe_failure(exc)
+            _print_json(result, fallback=batch_emergency_result if is_batch else emergency_result)
             return int(result["exitCode"])
         print(f"{exc.code}: {exc}", file=sys.stderr)
         return exc.exit_code
@@ -237,6 +257,36 @@ def main(argv: list[str] | None = None) -> int:
                 _print_json(result)
                 return int(result["exitCode"])
             return _run_machine(document, base_dir=path.parent)
+        if args.command == "batch":
+            request_path = args.request
+            if request_path == "-":
+                try:
+                    request_text = sys.stdin.read()
+                except UnicodeError:
+                    result = batch_failed_result(InputError("stdin is not valid UTF-8", stage="validation"))
+                    _print_json(result, fallback=batch_emergency_result)
+                    return int(result["exitCode"])
+                try:
+                    document = load_request(request_text)
+                except Exception as exc:
+                    result = batch_failed_result(exc)
+                    _print_json(result, fallback=batch_emergency_result)
+                    return int(result["exitCode"])
+                return _run_batch(document, base_dir=Path.cwd())
+            path = Path(request_path).resolve()
+            try:
+                request_text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                result = batch_failed_result(InputError(f"Cannot read batch request file: {path}", stage="validation"))
+                _print_json(result, fallback=batch_emergency_result)
+                return int(result["exitCode"])
+            try:
+                document = load_request(request_text)
+            except Exception as exc:
+                result = batch_failed_result(exc)
+                _print_json(result, fallback=batch_emergency_result)
+                return int(result["exitCode"])
+            return _run_batch(document, base_dir=path.parent)
         if args.command == "gui":
             try:
                 from .gui import run_gui

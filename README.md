@@ -59,9 +59,12 @@ Automation and AI callers should use the versioned JSON interface. It writes exa
 ```powershell
 slideguard job request.json
 slideguard export "figure.pptx" --slides 1 --json
+slideguard batch examples\batch-request.json
 ```
 
 Set `behavior.dryRun` to `true` to validate the request, PPTX package and slide selection without opening PowerPoint or publishing files. The shipped request, result, error and progress schemas are documented in [docs/interface-contract-v0.2.md](docs/interface-contract-v0.2.md).
+
+The batch entry accepts 1 to 100 independent requests and keeps output in input order. Its default `continue` strategy isolates a bad job and runs the rest. `fail-fast` leaves explicit skipped records. Safe reuse needs both the same source SHA-256 and the same normalized configuration; SlideGuard checks the published manifest, artifact hashes and `checksums.sha256` before returning a cached result. See [examples/batch-request.json](examples/batch-request.json) for a complete request.
 
 To crop like PowerPoint, give the four boundary positions as percentages of the slide. This keeps the area from 5% to 95% horizontally and 3% to 97% vertically:
 

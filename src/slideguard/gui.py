@@ -6,7 +6,19 @@ from pathlib import Path
 from typing import Any, Callable
 
 from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QThread, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QGuiApplication, QImage, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QFont,
+    QGuiApplication,
+    QImage,
+    QKeySequence,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -28,7 +40,9 @@ from PySide6.QtWidgets import (
 )
 
 from .application import ExportService
+from .errors import InputError
 from .geometry import NormalizedRect, effective_pixel_box, move_normalized_rect, resize_normalized_rect
+from .gui_state import EditHistory, EditorState, GuiDraft, GuiDraftStore
 from .ooxml import PptxPackage
 from .powerpoint import preview_reference
 from .util import default_work_root, ensure_within, sha256_file
@@ -36,6 +50,8 @@ from .util import default_work_root, ensure_within, sha256_file
 
 class CropCanvas(QWidget):
     rect_changed = Signal(object)
+    edit_started = Signal()
+    edit_finished = Signal()
 
     HANDLES = ("nw", "n", "ne", "e", "se", "s", "sw", "w")
 
@@ -51,6 +67,8 @@ class CropCanvas(QWidget):
         self._press_point: tuple[float, float] | None = None
         self._press_rect: NormalizedRect | None = None
         self._editable = True
+        self._keyboard_edit_active = False
+        self._keyboard_press_rect: NormalizedRect | None = None
 
     def set_image(self, path: Path) -> None:
         image = QImage(str(path))
@@ -62,6 +80,8 @@ class CropCanvas(QWidget):
         self.update()
 
     def set_editable(self, editable: bool) -> None:
+        if not editable:
+            self.commit_keyboard_edit()
         self._editable = editable
         self.setCursor(Qt.CursorShape.CrossCursor if editable else Qt.CursorShape.ArrowCursor)
         self.update()
@@ -163,6 +183,7 @@ class CropCanvas(QWidget):
     def mousePressEvent(self, event: Any) -> None:
         if not self._editable or not self._pixmap or event.button() != Qt.MouseButton.LeftButton:
             return
+        self.commit_keyboard_edit()
         point = event.position()
         crop_rect = self._mapped(self._crop, self._image_rect())
         self._drag = None
@@ -176,6 +197,7 @@ class CropCanvas(QWidget):
             self._press_point = self._normalized_point(point)
             self._press_rect = self._crop
             self.setFocus()
+            self.edit_started.emit()
 
     def mouseMoveEvent(self, event: Any) -> None:
         if not self._drag or not self._press_rect or not self._press_point:
@@ -198,9 +220,82 @@ class CropCanvas(QWidget):
         self.set_crop(updated, emit=True)
 
     def mouseReleaseEvent(self, _event: Any) -> None:
+        had_drag = self._drag is not None
         self._drag = None
         self._press_point = None
         self._press_rect = None
+        if had_drag:
+            self.edit_finished.emit()
+
+    def _reference_size(self) -> tuple[int, int]:
+        width = 4000
+        height = 2250
+        if self._pixmap:
+            height = round(width * self._pixmap.height() / self._pixmap.width())
+        return width, height
+
+    def keyPressEvent(self, event: Any) -> None:
+        arrows = {
+            Qt.Key.Key_Left: (-1, 0),
+            Qt.Key.Key_Right: (1, 0),
+            Qt.Key.Key_Up: (0, -1),
+            Qt.Key.Key_Down: (0, 1),
+        }
+        if event.key() == Qt.Key.Key_Escape and (self._keyboard_edit_active or self._drag):
+            original = self._keyboard_press_rect if self._keyboard_edit_active else self._press_rect
+            if original:
+                self.set_crop(original, emit=True)
+            self._drag = None
+            self._press_point = None
+            self._press_rect = None
+            self._keyboard_edit_active = False
+            self._keyboard_press_rect = None
+            self.edit_finished.emit()
+            event.accept()
+            return
+        if event.key() in {Qt.Key.Key_Enter, Qt.Key.Key_Return} and self._keyboard_edit_active:
+            self.commit_keyboard_edit()
+            event.accept()
+            return
+        if not self._editable or not self._pixmap or event.key() not in arrows:
+            super().keyPressEvent(event)
+            return
+        modifiers = event.modifiers()
+        if modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier):
+            super().keyPressEvent(event)
+            return
+        if not self._keyboard_edit_active:
+            self._keyboard_edit_active = True
+            self._keyboard_press_rect = self._crop
+            self.edit_started.emit()
+        width, height = self._reference_size()
+        multiplier = 10 if modifiers & Qt.KeyboardModifier.ShiftModifier else 1
+        horizontal, vertical = arrows[event.key()]
+        updated = move_normalized_rect(
+            self._crop,
+            horizontal * multiplier / width,
+            vertical * multiplier / height,
+        )
+        self.set_crop(updated, emit=True)
+        event.accept()
+
+    def keyReleaseEvent(self, event: Any) -> None:
+        arrows = {Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down}
+        if self._keyboard_edit_active and event.key() in arrows:
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
+    def focusOutEvent(self, event: Any) -> None:
+        self.commit_keyboard_edit()
+        super().focusOutEvent(event)
+
+    def commit_keyboard_edit(self) -> None:
+        if not self._keyboard_edit_active:
+            return
+        self._keyboard_edit_active = False
+        self._keyboard_press_rect = None
+        self.edit_finished.emit()
 
 
 class PreviewWorker(QObject):
@@ -264,11 +359,23 @@ class SlideGuardWindow(QMainWindow):
         self._threads: set[QThread] = set()
         self._workers: set[QObject] = set()
         self._last_package: Path | None = None
+        self._history_suspended = True
+        self._gesture_active = False
+        self._history: EditHistory | None = None
+        self._draft_store = GuiDraftStore(default_work_root().parent / "gui-drafts")
+        self._draft_dirty = False
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.setInterval(250)
         self._preview_timer.timeout.connect(self._request_preview)
+        self._draft_timer = QTimer(self)
+        self._draft_timer.setSingleShot(True)
+        self._draft_timer.setInterval(300)
+        self._draft_timer.timeout.connect(self._save_draft)
         self._build_ui()
+        self._history = EditHistory(self._capture_editor_state())
+        self._history_suspended = False
+        self._update_history_actions()
         if initial:
             self._load_source(initial)
 
@@ -289,6 +396,8 @@ class SlideGuardWindow(QMainWindow):
         splitter = QSplitter()
         self.canvas = CropCanvas()
         self.canvas.rect_changed.connect(self._canvas_changed)
+        self.canvas.edit_started.connect(self._begin_canvas_edit)
+        self.canvas.edit_finished.connect(self._finish_canvas_edit)
         splitter.addWidget(self.canvas)
 
         panel = QFrame()
@@ -297,7 +406,7 @@ class SlideGuardWindow(QMainWindow):
         form = QFormLayout()
         self.slide_spin = QSpinBox()
         self.slide_spin.setRange(1, 1)
-        self.slide_spin.valueChanged.connect(self._schedule_preview)
+        self.slide_spin.valueChanged.connect(self._slide_changed)
         form.addRow("页面", self.slide_spin)
 
         self.mode_combo = QComboBox()
@@ -305,6 +414,18 @@ class SlideGuardWindow(QMainWindow):
         self.mode_combo.addItem("自动紧边", "auto")
         self.mode_combo.currentIndexChanged.connect(self._controls_changed)
         form.addRow("裁剪模式", self.mode_combo)
+
+        crop_preset_row = QHBoxLayout()
+        self.crop_preset_combo = QComboBox()
+        self.crop_preset_combo.addItem("整页", (0.0, 0.0, 100.0, 100.0))
+        self.crop_preset_combo.addItem("四周裁掉 2%", (2.0, 2.0, 98.0, 98.0))
+        self.crop_preset_combo.addItem("四周裁掉 5%", (5.0, 5.0, 95.0, 95.0))
+        self.crop_preset_combo.addItem("四周裁掉 10%", (10.0, 10.0, 90.0, 90.0))
+        crop_preset_button = QPushButton("应用")
+        crop_preset_button.clicked.connect(self._apply_crop_preset)
+        crop_preset_row.addWidget(self.crop_preset_combo, 1)
+        crop_preset_row.addWidget(crop_preset_button)
+        form.addRow("裁剪预设", crop_preset_row)
 
         self.bound_spins: dict[str, QDoubleSpinBox] = {}
         for name, label, value in (
@@ -330,6 +451,16 @@ class SlideGuardWindow(QMainWindow):
             self.expand_spins[name] = spin
             form.addRow(label, spin)
 
+        expand_preset_row = QHBoxLayout()
+        self.expand_preset_combo = QComboBox()
+        for label, value in (("不扩展", 0.0), ("每边 1%", 1.0), ("每边 2%", 2.0), ("每边 5%", 5.0)):
+            self.expand_preset_combo.addItem(label, value)
+        expand_preset_button = QPushButton("应用")
+        expand_preset_button.clicked.connect(self._apply_expand_preset)
+        expand_preset_row.addWidget(self.expand_preset_combo, 1)
+        expand_preset_row.addWidget(expand_preset_button)
+        form.addRow("扩边预设", expand_preset_row)
+
         self.padding_spin = QSpinBox()
         self.padding_spin.setRange(0, 10000)
         self.padding_spin.setValue(16)
@@ -341,10 +472,25 @@ class SlideGuardWindow(QMainWindow):
         self.limit_spin.setDecimals(2)
         self.limit_spin.setValue(2.5)
         self.limit_spin.setSuffix(" MB")
+        self.limit_spin.valueChanged.connect(self._controls_changed)
         form.addRow("PDF / 紧凑 SVG 上限", self.limit_spin)
         panel_layout.addLayout(form)
 
+        history_row = QHBoxLayout()
+        self.undo_button = QPushButton("撤销")
+        self.undo_button.clicked.connect(self._undo)
+        self.redo_button = QPushButton("重做")
+        self.redo_button.clicked.connect(self._redo)
+        history_row.addWidget(self.undo_button)
+        history_row.addWidget(self.redo_button)
+        panel_layout.addLayout(history_row)
+        self.undo_shortcut = QShortcut(QKeySequence.StandardKey.Undo, self, activated=self._undo)
+        self.redo_shortcut = QShortcut(QKeySequence.StandardKey.Redo, self, activated=self._redo)
+        self.redo_alternate_shortcut = QShortcut(QKeySequence("Ctrl+Shift+Z"), self)
+        self.redo_alternate_shortcut.activated.connect(self._redo)
+
         panel_layout.addWidget(QLabel("蓝线：手动裁剪框    绿虚线：扩展与安全边后的实际输出框"))
+        panel_layout.addWidget(QLabel("选中预览后，方向键移动 1 个参考像素；Shift + 方向键移动 10 个。"))
         note = QLabel("PPT 里的 PNG/JPEG 会保留原始像素，但不会被伪装成矢量路径。最终 SVG 画布透明；真实白色图形仍保留。")
         note.setWordWrap(True)
         panel_layout.addWidget(note)
@@ -389,6 +535,9 @@ class SlideGuardWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "无法打开", str(exc))
             return
+        if self._source and self._source_sha and self._draft_dirty:
+            self._draft_timer.stop()
+            self._save_draft()
         self._source = path.resolve()
         try:
             self._source_sha = sha256_file(self._source)
@@ -396,11 +545,21 @@ class SlideGuardWindow(QMainWindow):
             QMessageBox.critical(self, "无法读取", str(exc))
             self._source = None
             return
+        self._history_suspended = True
         self.file_edit.setText(str(self._source))
         self.slide_spin.setRange(1, package.slide_count)
         self.output_edit.setText(str(self._source.parent / "slideguard-output"))
+        self._restore_draft_if_available(package.slide_count)
+        if self._history:
+            self._history.reset(self._capture_editor_state())
+        self._history_suspended = False
+        self._update_history_actions()
         self.export_button.setEnabled(True)
         self._schedule_preview()
+
+    def _slide_changed(self) -> None:
+        self._schedule_preview()
+        self._schedule_draft_save()
 
     def _schedule_preview(self) -> None:
         if self._source and not self._export_running:
@@ -476,6 +635,17 @@ class SlideGuardWindow(QMainWindow):
             spin.setValue(value)
             spin.blockSignals(False)
         self._update_effective(rect)
+        if not self._gesture_active:
+            self._record_editor_state()
+
+    def _begin_canvas_edit(self) -> None:
+        self._gesture_active = True
+
+    def _finish_canvas_edit(self) -> None:
+        if not self._gesture_active:
+            return
+        self._gesture_active = False
+        self._record_editor_state()
 
     def _manual_rect(self) -> NormalizedRect | None:
         try:
@@ -505,6 +675,151 @@ class SlideGuardWindow(QMainWindow):
             self.export_button.setEnabled(self._source is not None and not self._export_running)
             if self._source:
                 self.status.setText("自动紧边将在最终 4000 像素参考图上计算")
+        self._record_editor_state()
+
+    def _capture_editor_state(self) -> EditorState:
+        return EditorState(
+            mode=str(self.mode_combo.currentData()),
+            bounds_percent=tuple(spin.value() for spin in self.bound_spins.values()),
+            expand_percent=tuple(spin.value() for spin in self.expand_spins.values()),
+            padding_px=self.padding_spin.value(),
+            limit_mb=self.limit_spin.value(),
+        )
+
+    def _apply_editor_state(self, state: EditorState, *, record: bool) -> None:
+        widgets = [
+            self.mode_combo,
+            *self.bound_spins.values(),
+            *self.expand_spins.values(),
+            self.padding_spin,
+            self.limit_spin,
+        ]
+        previous = self._history_suspended
+        self._history_suspended = True
+        for widget in widgets:
+            widget.blockSignals(True)
+        try:
+            self.mode_combo.setCurrentIndex(self.mode_combo.findData(state.mode))
+            for spin, value in zip(self.bound_spins.values(), state.bounds_percent):
+                spin.setValue(value)
+            for spin, value in zip(self.expand_spins.values(), state.expand_percent):
+                spin.setValue(value)
+            self.padding_spin.setValue(state.padding_px)
+            self.limit_spin.setValue(state.limit_mb)
+        finally:
+            for widget in widgets:
+                widget.blockSignals(False)
+            self._history_suspended = previous
+        self._controls_changed()
+        if record and self._history:
+            self._history.record(state)
+            self._update_history_actions()
+            self._schedule_draft_save()
+
+    def _record_editor_state(self) -> None:
+        if self._history_suspended or self._gesture_active or not self._history:
+            return
+        try:
+            state = self._capture_editor_state()
+        except (InputError, TypeError, ValueError):
+            return
+        self._history.record(state)
+        self._update_history_actions()
+        self._schedule_draft_save()
+
+    def _update_history_actions(self) -> None:
+        if not hasattr(self, "undo_button") or not self._history:
+            return
+        self.undo_button.setEnabled(self._history.can_undo)
+        self.redo_button.setEnabled(self._history.can_redo)
+
+    def _undo(self) -> None:
+        if not self._history:
+            return
+        self.canvas.commit_keyboard_edit()
+        state = self._history.undo()
+        if state:
+            self._apply_editor_state(state, record=False)
+        self._update_history_actions()
+
+    def _redo(self) -> None:
+        if not self._history:
+            return
+        state = self._history.redo()
+        if state:
+            self._apply_editor_state(state, record=False)
+        self._update_history_actions()
+
+    def _apply_crop_preset(self) -> None:
+        bounds = self.crop_preset_combo.currentData()
+        if not bounds:
+            return
+        current = self._capture_editor_state()
+        self._apply_editor_state(
+            EditorState(
+                mode="manual",
+                bounds_percent=tuple(bounds),
+                expand_percent=current.expand_percent,
+                padding_px=current.padding_px,
+                limit_mb=current.limit_mb,
+            ),
+            record=True,
+        )
+
+    def _apply_expand_preset(self) -> None:
+        value = float(self.expand_preset_combo.currentData())
+        current = self._capture_editor_state()
+        self._apply_editor_state(
+            EditorState(
+                mode=current.mode,
+                bounds_percent=current.bounds_percent,
+                expand_percent=(value, value, value, value),
+                padding_px=current.padding_px,
+                limit_mb=current.limit_mb,
+            ),
+            record=True,
+        )
+
+    def _schedule_draft_save(self) -> None:
+        if self._source_sha and not self._history_suspended:
+            self._draft_dirty = True
+            self._draft_timer.start()
+
+    def _save_draft(self) -> None:
+        if not self._source or not self._source_sha:
+            return
+        try:
+            draft = GuiDraft(
+                source_path=str(self._source),
+                source_sha256=self._source_sha,
+                slide=self.slide_spin.value(),
+                editor=self._capture_editor_state(),
+            )
+            self._draft_store.save(draft)
+            self._draft_dirty = False
+        except (InputError, OSError, TypeError, ValueError):
+            return
+
+    def _restore_draft_if_available(self, slide_count: int) -> None:
+        if not self._source_sha:
+            return
+        draft = self._draft_store.load(self._source_sha)
+        if not draft:
+            return
+        answer = QMessageBox.question(
+            self,
+            "恢复上次编辑？",
+            "检测到这个文件上次保存或异常退出时留下的裁剪草稿。是否恢复？\n\n"
+            "草稿只存放在 SlideGuard 的本机草稿目录，不会覆盖导出配置或 PPTX。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.slide_spin.setValue(min(slide_count, draft.slide))
+            self._apply_editor_state(draft.editor, record=False)
+            self.status.setText("已恢复上次异常退出前的裁剪草稿")
+        else:
+            self._draft_store.discard(self._source_sha)
 
     def _update_effective(self, rect: NormalizedRect) -> None:
         reference_width = 4000
@@ -554,6 +869,9 @@ class SlideGuardWindow(QMainWindow):
         self._export_running = True
         self._preview_timer.stop()
         self._pending_preview = False
+        self._draft_timer.stop()
+        if self._draft_dirty:
+            self._save_draft()
         self.export_button.setEnabled(False)
         self.open_button.setEnabled(False)
         self.status.setText("正在准备导出…")
@@ -576,6 +894,10 @@ class SlideGuardWindow(QMainWindow):
         self._export_running = False
         self._controls_changed()
         if result["status"] == "succeeded":
+            self._draft_timer.stop()
+            if self._source_sha:
+                self._draft_store.discard(self._source_sha)
+            self._draft_dirty = False
             self._last_package = Path(result["output"]["packagePath"])
             self.open_button.setEnabled(True)
             verdict = result.get("verdict") or "完成"
@@ -608,6 +930,9 @@ class SlideGuardWindow(QMainWindow):
             )
             event.ignore()
             return
+        self._draft_timer.stop()
+        if self._draft_dirty:
+            self._save_draft()
         try:
             ensure_within(self._preview_root, default_work_root())
             if self._preview_root.exists():

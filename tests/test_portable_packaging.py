@@ -35,6 +35,13 @@ def test_manifest_and_checksum_rows_are_sorted_and_detect_changes(tmp_path):
 
     assert first == second
     document = json.loads(first)
+    assert document["networkPolicy"] == {
+        "version": "1.0",
+        "mode": "offline-only",
+        "telemetryEnabled": False,
+        "automaticUploadsEnabled": False,
+        "updateChecksEnabled": False,
+    }
     assert [item["path"] for item in document["files"]] == [
         "_internal/a.dll",
         "_internal/z.dll",
@@ -51,6 +58,22 @@ def test_manifest_and_checksum_rows_are_sorted_and_detect_changes(tmp_path):
         "hash mismatch: _internal/a.dll",
         "unlisted: unexpected.dll",
     ]
+
+
+def test_build_info_binds_source_revision_and_offline_policy(monkeypatch):
+    monkeypatch.setattr(portable_build, "_git_revision", lambda: "a" * 40)
+    monkeypatch.setattr(portable_build.metadata, "version", lambda _name: "6.test")
+
+    document = portable_build.build_info_document("0.test")
+
+    assert document["sourceRevision"] == "a" * 40
+    assert document["networkPolicy"] == {
+        "version": "1.0",
+        "mode": "offline-only",
+        "telemetryEnabled": False,
+        "automaticUploadsEnabled": False,
+        "updateChecksEnabled": False,
+    }
 
 
 def test_checksum_verifier_rejects_paths_outside_package(tmp_path):

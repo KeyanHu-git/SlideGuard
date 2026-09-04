@@ -58,6 +58,8 @@ def package_files(package_root: Path, *, exclude: set[str] | None = None) -> lis
 
 
 def build_manifest(package_root: Path, package_version: str) -> dict[str, Any]:
+    from slideguard.offline import offline_policy
+
     entries = []
     for path in package_files(package_root, exclude=GENERATED_FILES):
         entries.append(
@@ -72,6 +74,7 @@ def build_manifest(package_root: Path, package_version: str) -> dict[str, Any]:
         "package": "SlideGuard",
         "version": package_version,
         "hashAlgorithm": "SHA-256",
+        "networkPolicy": offline_policy(),
         "excludes": ["MANIFEST.json", "SHA256SUMS"],
         "files": entries,
     }
@@ -392,6 +395,21 @@ def _git_revision() -> str | None:
     return process.stdout.strip() if process.returncode == 0 else None
 
 
+def build_info_document(package_version: str) -> dict[str, Any]:
+    from slideguard.offline import offline_policy
+
+    return {
+        "schemaVersion": 1,
+        "package": "SlideGuard",
+        "version": package_version,
+        "sourceRevision": _git_revision(),
+        "networkPolicy": offline_policy(),
+        "python": sys.version.split()[0],
+        "pyinstaller": metadata.version("PyInstaller"),
+        "sourceDateEpoch": os.environ.get("SOURCE_DATE_EPOCH"),
+    }
+
+
 def finalize_package(package_root: Path) -> dict[str, Path]:
     from slideguard import __version__
 
@@ -411,15 +429,7 @@ def finalize_package(package_root: Path) -> dict[str, Path]:
         encoding="utf-8",
     )
 
-    build_info = {
-        "schemaVersion": 1,
-        "package": "SlideGuard",
-        "version": __version__,
-        "sourceRevision": _git_revision(),
-        "python": sys.version.split()[0],
-        "pyinstaller": metadata.version("PyInstaller"),
-        "sourceDateEpoch": os.environ.get("SOURCE_DATE_EPOCH"),
-    }
+    build_info = build_info_document(__version__)
     build_info_path = package_root / "BUILD-INFO.json"
     build_info_path.write_text(json.dumps(build_info, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     sbom_path, notices_path = write_component_documents(package_root, boundaries)

@@ -18,6 +18,7 @@ from .engine import ExportOptions, doctor, export_job
 from .errors import EnvironmentError, InputError, SlideGuardError
 from .machine_io import MachineOutputFirewall, emit_noise_summary, sanitize_machine_document
 from .verify import verify_package
+from .workspace import run_startup_maintenance
 
 
 class SlideGuardArgumentParser(argparse.ArgumentParser):
@@ -377,6 +378,8 @@ def _document_from_export_args(args: argparse.Namespace) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     _configure_utf8_streams()
+    if argv is None:
+        run_startup_maintenance()
     parser = build_parser()
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     machine_hint = bool(raw_argv) and (

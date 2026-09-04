@@ -24,6 +24,7 @@ from .reporting import write_reports
 from .render import svg_renderer_info
 from .svg_pipeline import SvgPatchResult, convert_pdf_to_svg, restore_svg_images
 from .util import checksum_lines, default_work_root, ensure_within, native_long_path, parse_slides, safe_slug, sha256_file, stable_json, utc_now, write_json
+from .workspace import create_owned_workspace, delete_owned_workspace, mark_workspace_complete
 
 
 @dataclass(slots=True)
@@ -51,7 +52,12 @@ def doctor(
 ) -> dict:
     from .util import require_executable
 
-    work_root = work_root or default_work_root() / "doctor"
+    owned_workspace = None
+    if work_root is None:
+        owned_workspace = create_owned_workspace(
+            default_work_root(), prefix="doctor", task_id="doctor", kind="doctor-workspace",
+        )
+        work_root = owned_workspace.path
     result = {
         "tool": {"name": "SlideGuard", "version": __version__},
         "platform": {"system": platform.system(), "release": platform.release(), "version": platform.version(), "machine": platform.machine()},
@@ -99,6 +105,9 @@ def doctor(
         except (ImportError, PackageNotFoundError) as exc:
             result["ok"] = False
             result["errors"].append(f"Python package {module}: {exc}")
+    if owned_workspace is not None and result["ok"]:
+        if mark_workspace_complete(owned_workspace):
+            delete_owned_workspace(owned_workspace)
     return result
 
 
@@ -228,7 +237,13 @@ def export_job(
     config_hash = __import__("hashlib").sha256(stable_json(config).encode("utf-8")).hexdigest()
     slug = safe_slug(source.stem)
     job_id = f"{slug}--{source_hash_before[:8]}--{config_hash[:8]}"
-    work_dir = default_work_root() / f"{source_hash_before[:8]}-{config_hash[:8]}-{uuid.uuid4().hex[:6]}"
+    owned_workspace = create_owned_workspace(
+        default_work_root(),
+        prefix=f"{source_hash_before[:8]}-{config_hash[:8]}",
+        task_id=job_id,
+        kind="export-workspace",
+    )
+    work_dir = owned_workspace.path
     package_dir = work_dir / "package"
     package_dir.mkdir(parents=True, exist_ok=False)
     (package_dir / "svg").mkdir()
@@ -384,5 +399,6 @@ def export_job(
     _publish_package(package_dir, output_root, final_dir, job_id, cancel_token)
     progress("publication", "complete", "Verified package published", 1, 1)
     ensure_within(work_dir, default_work_root())
-    shutil.rmtree(work_dir)
+    if mark_workspace_complete(owned_workspace):
+        delete_owned_workspace(owned_workspace)
     return final_dir, report

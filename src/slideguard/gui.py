@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import shutil
-import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -46,7 +44,14 @@ from .geometry import NormalizedRect, effective_pixel_box, move_normalized_rect,
 from .gui_state import EditHistory, EditorState, GuiDraft, GuiDraftStore
 from .ooxml import PptxPackage
 from .powerpoint import preview_reference
-from .util import default_work_root, ensure_within, sha256_file
+from .util import default_work_root, sha256_file
+from .workspace import (
+    OwnedWorkspace,
+    create_owned_workspace,
+    delete_owned_workspace,
+    mark_workspace_complete,
+    run_startup_maintenance,
+)
 
 
 class CropCanvas(QWidget):
@@ -363,7 +368,8 @@ class SlideGuardWindow(QMainWindow):
         self._pending_preview = False
         self._export_running = False
         self._export_token: CancellationToken | None = None
-        self._preview_root = default_work_root() / f"preview-session-{uuid.uuid4().hex}"
+        self._preview_workspace: OwnedWorkspace | None = None
+        self._preview_root = default_work_root()
         self._threads: set[QThread] = set()
         self._workers: set[QObject] = set()
         self._last_package: Path | None = None
@@ -592,6 +598,14 @@ class SlideGuardWindow(QMainWindow):
         if self._preview_running:
             self._pending_preview = True
             return
+        if self._preview_workspace is None:
+            self._preview_workspace = create_owned_workspace(
+                default_work_root(),
+                prefix="preview-session",
+                task_id="gui-preview",
+                kind="preview-workspace",
+            )
+            self._preview_root = self._preview_workspace.path
         self._preview_running = True
         generation = self._preview_generation
         slide = self.slide_spin.value()
@@ -979,16 +993,14 @@ class SlideGuardWindow(QMainWindow):
         self._draft_timer.stop()
         if self._draft_dirty:
             self._save_draft()
-        try:
-            ensure_within(self._preview_root, default_work_root())
-            if self._preview_root.exists():
-                shutil.rmtree(self._preview_root)
-        except Exception:
-            pass
+        if self._preview_workspace is not None:
+            if mark_workspace_complete(self._preview_workspace):
+                delete_owned_workspace(self._preview_workspace)
         event.accept()
 
 
 def run_gui(initial: Path | None = None) -> int:
+    run_startup_maintenance()
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )

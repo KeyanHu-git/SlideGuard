@@ -6,6 +6,8 @@ Status: required release contract for `v0.2.0-beta.1`.
 
 Every shipped runtime entry point is offline-only: GUI, `doctor`, `diagnose`, `export`, `verify`, `fixtures`, `job` and `batch`. SlideGuard does not collect telemetry, upload diagnostics, check for updates, resolve remote schemas or call an HTTP API. `diagnose` only writes a local JSON document after explicit consent.
 
+The policy is compiled into the application and does not read a user configuration switch. A missing configuration, an inherited `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`, or a telemetry-shaped environment variable cannot enable network behavior.
+
 The policy is represented by one machine-readable structure:
 
 ```json

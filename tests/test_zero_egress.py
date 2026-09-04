@@ -13,6 +13,7 @@ import pytest
 import slideguard.cli as cli
 import slideguard.fixtures as fixtures
 import slideguard.gui_launcher as gui_launcher
+from slideguard.application import ExportService
 from slideguard.batch import BatchService
 from slideguard.contracts import prepare_request, validated_result
 from slideguard.engine import doctor
@@ -126,6 +127,44 @@ def test_job_batch_and_application_dry_run_make_no_network_attempt(
     batch = {"schemaVersion": "1.0", "jobs": [job], "behavior": {"strategy": "continue"}}
     batch_result = BatchService().execute(batch, base_dir=tmp_path)
     assert batch_result["counts"]["succeeded"] == 1
+    assert attempts == []
+
+
+def test_proxy_config_and_telemetry_environment_cannot_enable_egress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = _install_network_trap(monkeypatch)
+    source = _pptx(tmp_path / "figure.pptx")
+    request = {
+        "schemaVersion": "1.0",
+        "input": source.name,
+        "behavior": {"dryRun": True},
+    }
+    environment_names = (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "SLIDEGUARD_TELEMETRY",
+        "SLIDEGUARD_CONFIG",
+    )
+    values = (
+        "http://127.0.0.1:9",
+        "http://127.0.0.1:9",
+        "socks5://127.0.0.1:9",
+        "1",
+        str(tmp_path / "missing-config.json"),
+    )
+    for name, value in zip(environment_names, values):
+        monkeypatch.setenv(name, value)
+    inherited_environment_result = ExportService().execute(request, base_dir=tmp_path)
+
+    for name in environment_names:
+        monkeypatch.delenv(name, raising=False)
+    missing_configuration_result = ExportService().execute(request, base_dir=tmp_path)
+
+    assert inherited_environment_result == missing_configuration_result
+    assert missing_configuration_result["status"] == "validated"
+    assert offline_policy()["telemetryEnabled"] is False
     assert attempts == []
 
 

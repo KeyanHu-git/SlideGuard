@@ -203,3 +203,13 @@ Symptoms: a crashed resume writer has released its file lock, but a replacement 
 Cause: an exited Windows process object can remain queryable while another handle is open. `GetProcessTimes` may therefore return the same creation token for a process that is no longer running. Token equality proves PID identity, not liveness.
 
 Fix: test `GetExitCodeProcess == STILL_ACTIVE` first. Only a live PID proceeds to start-token comparison. A real two-process test makes one writer call `os._exit`, verifies that its stale lease remains, and then requires a new writer to take over without deleting or weakening the owner evidence.
+
+## 26. A Chromium launcher can exit before its detached screenshot child
+
+Symptoms: Edge returns exit code zero, but the SVG verification PNG is reported missing. On a later run the PNG may exist, yet cleanup fails because a cache journal inside the temporary browser profile is still locked.
+
+Cause: on Windows, the Edge/Chrome launcher process is not a reliable completion boundary. A detached headless child can still be writing the screenshot or shutting down after the launcher exits.
+
+Fix: keep the HTML source and unique browser profile alive until the PNG both fully decodes and has the exact expected dimensions. Then copy the completed evidence image and retry removal of the exact temporary profile while the child releases its handles. Browser background networking, sync and component updates are disabled; launcher success alone is never treated as render success.
+
+Proof: unit tests cover delayed creation, incomplete/absent output, wrong dimensions and transient profile locks. The real compact SVG must render successfully at 640, 1600 and 3840 pixels. Linear: KEY-213.

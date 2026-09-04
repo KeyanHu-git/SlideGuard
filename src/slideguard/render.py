@@ -4,6 +4,7 @@ import html
 import re
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 from PIL import Image
@@ -80,8 +81,8 @@ def _svg_pixel_size(svg: Path, requested_width: int | None) -> tuple[int, int]:
 
 def _render_svg_chromium(browser: str, svg: Path, output_png: Path, width: int | None) -> None:
     output_width, output_height = _svg_pixel_size(svg, width)
-    with tempfile.TemporaryDirectory(prefix="slideguard-svg-") as temporary:
-        work = Path(temporary)
+    work = Path(tempfile.mkdtemp(prefix="slideguard-svg-"))
+    try:
         page = work / "render.html"
         screenshot = work / "render.png"
         profile = work / "profile"
@@ -99,8 +100,13 @@ def _render_svg_chromium(browser: str, svg: Path, output_png: Path, width: int |
                 browser,
                 "--headless",
                 "--disable-gpu",
+                "--disable-background-mode",
+                "--disable-background-networking",
+                "--disable-component-update",
+                "--disable-sync",
                 "--hide-scrollbars",
                 "--no-first-run",
+                "--no-default-browser-check",
                 "--disable-extensions",
                 f"--user-data-dir={profile}",
                 f"--window-size={output_width},{output_height}",
@@ -111,15 +117,66 @@ def _render_svg_chromium(browser: str, svg: Path, output_png: Path, width: int |
             ],
             timeout=300,
         )
-        if not screenshot.exists():
-            raise RuntimeError("Chromium did not create an SVG screenshot")
-        with Image.open(screenshot) as rendered:
-            rendered_size = rendered.size
-        if rendered_size != (output_width, output_height):
-            raise RuntimeError(
-                f"Chromium SVG render size mismatch: {rendered_size} != {(output_width, output_height)}"
-            )
+        _wait_for_chromium_screenshot(screenshot, (output_width, output_height))
         shutil.copy2(screenshot, output_png)
+    finally:
+        _remove_chromium_workdir(work)
+
+
+def _wait_for_chromium_screenshot(
+    screenshot: Path,
+    expected_size: tuple[int, int],
+    *,
+    timeout: float = 30.0,
+    poll_interval: float = 0.05,
+) -> None:
+    """Wait for Edge/Chrome's detached headless child to finish the PNG.
+
+    On Windows the browser launcher can return successfully before its child
+    has created the screenshot.  A valid, fully decoded PNG is the completion
+    signal; launcher exit alone is not.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        if screenshot.is_file():
+            try:
+                with Image.open(screenshot) as rendered:
+                    rendered.load()
+                    rendered_size = rendered.size
+                if rendered_size != expected_size:
+                    raise RuntimeError(
+                        f"Chromium SVG render size mismatch: {rendered_size} != {expected_size}"
+                    )
+                return
+            except OSError:
+                # The browser may have created the path but not completed the
+                # PNG chunks yet. Keep the profile/page alive and poll again.
+                pass
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError("Chromium did not create a complete SVG screenshot")
+        time.sleep(min(poll_interval, remaining))
+
+
+def _remove_chromium_workdir(
+    work: Path,
+    *,
+    timeout: float = 15.0,
+    poll_interval: float = 0.05,
+) -> None:
+    """Remove a browser profile after detached Chromium children release it."""
+    deadline = time.monotonic() + timeout
+    last_error: OSError | None = None
+    while work.exists():
+        try:
+            shutil.rmtree(work)
+            return
+        except OSError as exc:
+            last_error = exc
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(f"Chromium did not release its temporary profile: {work}") from last_error
+        time.sleep(min(poll_interval, remaining))
 
 
 def render_pdf(pdf: Path, output_png: Path, dpi: int) -> Path:

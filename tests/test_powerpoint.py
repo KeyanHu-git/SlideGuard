@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from slideguard.errors import ExportError
+from slideguard.cancellation import CancellationToken
+from slideguard.errors import CancelledError, ExportError
 from slideguard.powerpoint import (
     _proven_owned_process,
     _timeout_details,
@@ -45,6 +46,9 @@ class _TimedOutWorker:
     def communicate(self, timeout=None):
         raise subprocess.TimeoutExpired("worker", timeout)
 
+    def poll(self):
+        return None
+
     def terminate(self):
         self.terminated = True
 
@@ -79,6 +83,28 @@ def _worker_state(*, nonce: str, worker_pid: int, ownership: str) -> dict:
             },
         },
     }
+
+
+def test_caller_cancellation_uses_worker_cleanup_path(tmp_path: Path, monkeypatch):
+    worker = _TimedOutWorker()
+    token = CancellationToken()
+    token.cancel()
+    monkeypatch.setattr("slideguard.powerpoint.subprocess.Popen", lambda *_args, **_kwargs: worker)
+    monkeypatch.setattr("slideguard.powerpoint._powershell", lambda: "powershell")
+    monkeypatch.setattr("slideguard.powerpoint._worker", lambda: tmp_path / "worker.ps1")
+    observed = []
+
+    def cleanup(process, **kwargs):
+        observed.append((process, kwargs))
+        return {"residualRisk": False}
+
+    monkeypatch.setattr("slideguard.powerpoint._timeout_details", cleanup)
+    with pytest.raises(CancelledError) as caught:
+        invoke({"mode": "probe"}, tmp_path / "work", cancel_token=token)
+
+    assert caught.value.code == "CANCELLED"
+    assert caught.value.details["requestedBy"] == "caller"
+    assert observed[0][0] is worker
 
 
 def test_owned_pid_requires_nonce_worker_and_all_four_proofs():

@@ -12,7 +12,8 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from .errors import EnvironmentError, ExportError
+from .cancellation import CancellationToken
+from .errors import CancelledError, EnvironmentError, ExportError
 from .util import write_json
 
 
@@ -198,7 +199,7 @@ def _timeout_details(
         or forced_cleanup_incomplete
     )
     return {
-        "timeoutSeconds": grace_seconds,
+        "graceSeconds": grace_seconds,
         "cancelRequested": True,
         "workerPid": process.pid,
         "workerDisposition": worker_disposition,
@@ -216,7 +217,12 @@ def _timeout_details(
     }
 
 
-def invoke(job: dict, work_dir: Path, timeout: int = 300) -> dict:
+def invoke(
+    job: dict,
+    work_dir: Path,
+    timeout: int = 300,
+    cancel_token: CancellationToken | None = None,
+) -> dict:
     work_dir.mkdir(parents=True, exist_ok=True)
     job_path = work_dir / "powerpoint-job.json"
     result_path = work_dir / "powerpoint-result.json"
@@ -234,9 +240,35 @@ def invoke(job: dict, work_dir: Path, timeout: int = 300) -> dict:
         "-ExecutionPolicy", "Bypass", "-File", str(_worker()), "-JobJson", str(job_path),
     ]
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    try:
-        stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
+    deadline = time.monotonic() + timeout
+    stdout = ""
+    stderr = ""
+    communicated = False
+    while True:
+        if cancel_token and cancel_token.is_cancelled:
+            details = _timeout_details(
+                process,
+                status_path=status_path,
+                cancel_path=cancel_path,
+                nonce=nonce,
+                grace_seconds=3.0,
+            )
+            details["requestedBy"] = "caller"
+            raise CancelledError(
+                "The PowerPoint operation was cancelled",
+                stage="cancellation",
+                details=details,
+            )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            stdout, stderr = process.communicate(timeout=min(0.25, remaining))
+            communicated = True
+            break
+        except subprocess.TimeoutExpired:
+            continue
+    if not communicated and process.poll() is None:
         details = _timeout_details(
             process,
             status_path=status_path,
@@ -249,7 +281,9 @@ def invoke(job: dict, work_dir: Path, timeout: int = 300) -> dict:
             f"PowerPoint worker timed out after {timeout}s",
             stage="export",
             details=details,
-        ) from exc
+        )
+    if not communicated:
+        stdout, stderr = process.communicate()
     if not result_path.exists():
         detail = stderr.strip() or stdout.strip()
         raise ExportError(f"PowerPoint worker returned no result: {detail}", stage="export")
@@ -260,8 +294,10 @@ def invoke(job: dict, work_dir: Path, timeout: int = 300) -> dict:
     return result
 
 
-def probe(work_dir: Path) -> dict:
-    return invoke({"mode": "probe"}, work_dir, timeout=60)["powerpoint"]
+def probe(work_dir: Path, cancel_token: CancellationToken | None = None) -> dict:
+    return invoke(
+        {"mode": "probe"}, work_dir, timeout=60, cancel_token=cancel_token,
+    )["powerpoint"]
 
 
 def export_reference(
@@ -270,6 +306,7 @@ def export_reference(
     work_dir: Path,
     reference_width: int = 4000,
     timeout: int = 300,
+    cancel_token: CancellationToken | None = None,
 ) -> dict:
     result = invoke(
         {
@@ -282,6 +319,7 @@ def export_reference(
         },
         work_dir,
         timeout=timeout,
+        cancel_token=cancel_token,
     )
     return {**result["export"], "powerpoint": result["powerpoint"]}
 

@@ -4,6 +4,7 @@ import zipfile
 from pathlib import Path
 
 from slideguard.application import ExportService
+from slideguard.cancellation import CancellationToken
 
 
 def _pptx(path: Path) -> Path:
@@ -61,3 +62,26 @@ def test_service_has_schema_independent_emergency_result(tmp_path: Path, monkeyp
     assert result["status"] == "failed"
     assert result["exitCode"] == 70
     assert result["error"]["stage"] == "result-serialization"
+
+
+def test_service_returns_stable_cancelled_result_before_export(tmp_path: Path, monkeypatch):
+    source = _pptx(tmp_path / "cancel.pptx")
+    token = CancellationToken()
+    token.cancel()
+    called = False
+
+    def unexpected(*_args, **_kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr("slideguard.application.export_job", unexpected)
+    result = ExportService().execute(
+        {"schemaVersion": "1.0", "input": source.name},
+        base_dir=tmp_path,
+        cancel_token=token,
+    )
+
+    assert called is False
+    assert result["status"] == "failed"
+    assert result["exitCode"] == 60
+    assert result["error"]["code"] == "CANCELLED"

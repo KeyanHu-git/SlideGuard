@@ -12,7 +12,8 @@ from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 
 from . import PIPELINE_REVISION, __version__
-from .errors import BudgetError, EnvironmentError, FidelityError
+from .cancellation import CancellationToken
+from .errors import BudgetError, CancelledError, EnvironmentError, FidelityError
 from .model import ArtifactRecord, Finding, JobReport, Severity, Verdict
 from .ooxml import PptxPackage
 from .pdf_pipeline import PdfPatchResult, restore_pdf_images
@@ -41,7 +42,7 @@ class ExportOptions:
     strict: bool = True
 
 
-def doctor(work_root: Path | None = None) -> dict:
+def doctor(work_root: Path | None = None, cancel_token: CancellationToken | None = None) -> dict:
     from .util import require_executable
 
     work_root = work_root or default_work_root() / "doctor"
@@ -66,7 +67,11 @@ def doctor(work_root: Path | None = None) -> dict:
         result["ok"] = False
         result["errors"].append(str(exc))
     try:
-        result["powerpoint"] = probe(work_root)
+        result["powerpoint"] = (
+            probe(work_root, cancel_token=cancel_token) if cancel_token else probe(work_root)
+        )
+    except CancelledError:
+        raise
     except Exception as exc:
         result["ok"] = False
         result["errors"].append(str(exc))
@@ -153,10 +158,46 @@ def _relative_artifact(kind: str, path: Path, package_dir: Path, slide: int, pro
     return ArtifactRecord(kind, path.relative_to(package_dir).as_posix(), sha256_file(path), path.stat().st_size, slide, producer, metadata or {})
 
 
-def export_job(input_pptx: Path, options: ExportOptions) -> tuple[Path, JobReport]:
+def _check_cancel(cancel_token: CancellationToken | None) -> None:
+    if cancel_token:
+        cancel_token.throw_if_cancelled()
+
+
+def _publish_package(
+    package_dir: Path,
+    output_root: Path,
+    final_dir: Path,
+    job_id: str,
+    cancel_token: CancellationToken | None,
+) -> None:
+    output_root.mkdir(parents=True, exist_ok=True)
+    _check_cancel(cancel_token)
+    publish_dir = output_root / f".sg-publish-{uuid.uuid4().hex[:8]}"
+    try:
+        shutil.copytree(native_long_path(package_dir), native_long_path(publish_dir))
+        _check_cancel(cancel_token)
+        if final_dir.exists():
+            old_manifest = final_dir / "manifest.json"
+            if old_manifest.exists() and json.loads(old_manifest.read_text(encoding="utf-8"))["jobId"] == job_id:
+                return
+            raise FidelityError(f"Output collision: {final_dir}")
+        os.replace(native_long_path(publish_dir), native_long_path(final_dir))
+    finally:
+        if publish_dir.exists():
+            shutil.rmtree(native_long_path(publish_dir))
+
+
+def export_job(
+    input_pptx: Path,
+    options: ExportOptions,
+    *,
+    cancel_token: CancellationToken | None = None,
+) -> tuple[Path, JobReport]:
+    _check_cancel(cancel_token)
     source = input_pptx.resolve()
     package = PptxPackage.open(source)
     slides = parse_slides(options.slides, package.slide_count)
+    _check_cancel(cancel_token)
     source_hash_before = sha256_file(source)
     config = asdict(options)
     config["output_root"] = str(options.output_root) if options.output_root else None
@@ -173,33 +214,42 @@ def export_job(input_pptx: Path, options: ExportOptions) -> tuple[Path, JobRepor
     (package_dir / "png").mkdir()
     (package_dir / "evidence").mkdir()
 
-    environment = doctor(work_dir / "doctor")
+    environment = doctor(work_dir / "doctor", cancel_token=cancel_token)
     if not environment["ok"]:
         raise EnvironmentError("; ".join(environment["errors"]))
+    _check_cancel(cancel_token)
     features = [package.inventory(slide) for slide in slides]
     findings: list[Finding] = []
     artifacts: list[ArtifactRecord] = []
     slide_manifest = []
 
     for ordinal, (slide, inventory) in enumerate(zip(slides, features), 1):
+        _check_cancel(cancel_token)
         slide_work = work_dir / f"slide-{slide:04d}"
         slide_work.mkdir(parents=True)
-        export = export_reference(source, slide, slide_work, options.reference_width)
+        export = export_reference(
+            source, slide, slide_work, options.reference_width,
+            cancel_token=cancel_token,
+        )
+        _check_cancel(cancel_token)
         native_pdf = Path(export["nativePdf"])
         reference_png = Path(export["referencePng"])
         stem = f"{slug}--p{ordinal:04d}-s{slide:04d}"
         final_pdf = package_dir / f"{stem}.pdf"
         pdf_result, profile = _patch_pdf_with_budget(native_pdf, package, slide, reference_png, final_pdf, options)
+        _check_cancel(cancel_token)
         artifacts.append(_relative_artifact("pdf", final_pdf, package_dir, slide, "powerpoint-native+image-restore", {**asdict(pdf_result), **profile}))
 
         raw_svg = slide_work / "powerpoint-native.svg"
         final_svg = package_dir / "svg" / f"{stem}.svg"
         convert_pdf_to_svg(native_pdf, raw_svg)
+        _check_cancel(cancel_token)
         svg_result = restore_svg_images(
             raw_svg, package, slide, reference_png, final_svg,
             padding_px=options.padding_px, crop_percent=options.crop_percent,
             expand_percent=options.expand_percent,
         )
+        _check_cancel(cancel_token)
         artifacts.append(_relative_artifact("svg", final_svg, package_dir, slide, "pdftocairo+image-restore", asdict(svg_result)))
 
         if options.svg_max_bytes is not None:
@@ -209,6 +259,7 @@ def export_job(input_pptx: Path, options: ExportOptions) -> tuple[Path, JobRepor
             compact_result, compact_profile = _patch_svg_with_budget(
                 raw_svg, package, slide, reference_png, compact_svg, options,
             )
+            _check_cancel(cancel_token)
             artifacts.append(_relative_artifact(
                 "svg-compact", compact_svg, package_dir, slide,
                 "pdftocairo+budgeted-image-restore", {**asdict(compact_result), **compact_profile},
@@ -231,12 +282,14 @@ def export_job(input_pptx: Path, options: ExportOptions) -> tuple[Path, JobRepor
             final_pdf, native_pdf, evidence_dir, inventory, pdf_result.crop_box,
             float(export["slideWidthPt"]), float(export["slideHeightPt"]), list(options.dpis),
         ))
+        _check_cancel(cancel_token)
         svg_findings, png_source = validate_svg_renders(
             final_svg, evidence_dir, inventory, list(options.svg_widths),
             reference_png, pdf_result.crop_box,
             float(export["slideWidthPt"]), float(export["slideHeightPt"]),
         )
         findings.extend(svg_findings)
+        _check_cancel(cancel_token)
         final_png = package_dir / "png" / f"{stem}.png"
         shutil.copy2(png_source, final_png)
         artifacts.append(_relative_artifact("png", final_png, package_dir, slide, "accepted-svg-raster"))
@@ -251,6 +304,7 @@ def export_job(input_pptx: Path, options: ExportOptions) -> tuple[Path, JobRepor
             ))
         slide_manifest.append({"outputOrdinal": ordinal, "sourceSlide": slide, "slidePart": inventory.slide_part, "stem": stem})
 
+    _check_cancel(cancel_token)
     source_hash_after = sha256_file(source)
     findings.append(Finding(
         code="SOURCE_IMMUTABLE", status=Verdict.PASS if source_hash_before == source_hash_after else Verdict.FAIL,
@@ -286,24 +340,14 @@ def export_job(input_pptx: Path, options: ExportOptions) -> tuple[Path, JobRepor
     write_reports(report, package_dir)
     checksum_targets = [path for path in package_dir.rglob("*") if path.is_file() and path.name != "checksums.sha256"]
     (package_dir / "checksums.sha256").write_text(checksum_lines(checksum_targets, package_dir), encoding="utf-8")
+    _check_cancel(cancel_token)
 
     if options.strict and verdict == Verdict.FAIL:
         raise FidelityError(f"QA failed; evidence remains at {package_dir}")
 
     output_root = (options.output_root or (source.parent / "slideguard-output")).resolve()
-    output_root.mkdir(parents=True, exist_ok=True)
     final_dir = output_root / job_id
-    publish_dir = output_root / f".sg-publish-{uuid.uuid4().hex[:8]}"
-    shutil.copytree(native_long_path(package_dir), native_long_path(publish_dir))
-    if final_dir.exists():
-        old_manifest = final_dir / "manifest.json"
-        if old_manifest.exists() and json.loads(old_manifest.read_text(encoding="utf-8"))["jobId"] == job_id:
-            shutil.rmtree(native_long_path(publish_dir))
-        else:
-            shutil.rmtree(native_long_path(publish_dir))
-            raise FidelityError(f"Output collision: {final_dir}")
-    else:
-        os.replace(native_long_path(publish_dir), native_long_path(final_dir))
+    _publish_package(package_dir, output_root, final_dir, job_id, cancel_token)
     ensure_within(work_dir, default_work_root())
     shutil.rmtree(work_dir)
     return final_dir, report

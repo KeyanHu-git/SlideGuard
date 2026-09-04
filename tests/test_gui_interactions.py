@@ -13,6 +13,7 @@ from PySide6.QtGui import QImage, QKeyEvent, QPixmap
 from PySide6.QtWidgets import QApplication
 
 from slideguard.geometry import NormalizedRect
+from slideguard.cancellation import CancellationToken
 from slideguard.gui import CropCanvas, SlideGuardWindow
 from slideguard.gui_state import GuiDraftStore
 
@@ -28,6 +29,19 @@ def make_canvas(application) -> CropCanvas:
     canvas._pixmap = QPixmap.fromImage(QImage(1600, 900, QImage.Format.Format_ARGB32))
     canvas.set_crop(NormalizedRect(0.1, 0.1, 0.9, 0.9))
     return canvas
+
+
+def test_cancel_button_sets_thread_safe_token(application):
+    window = SlideGuardWindow()
+    window._export_running = True
+    window._export_token = CancellationToken()
+    window.cancel_button.setEnabled(True)
+
+    window._cancel_export()
+
+    assert window._export_token.is_cancelled is True
+    assert window.cancel_button.isEnabled() is False
+    assert "不会发布" in window.status.text()
 
 
 @pytest.mark.parametrize(

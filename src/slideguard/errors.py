@@ -44,3 +44,8 @@ class FidelityError(SlideGuardError):
 class BudgetError(FidelityError):
     exit_code = 51
     code = "BUDGET_UNSATISFIABLE"
+
+
+class CancelledError(SlideGuardError):
+    exit_code = 60
+    code = "CANCELLED"

@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 )
 
 from .application import ExportService
+from .cancellation import CancellationToken
 from .errors import InputError
 from .geometry import NormalizedRect, effective_pixel_box, move_normalized_rect, resize_normalized_rect
 from .gui_state import EditHistory, EditorState, GuiDraft, GuiDraftStore
@@ -331,14 +332,20 @@ class ExportWorker(QObject):
     finished = Signal(object)
     progress = Signal(object)
 
-    def __init__(self, document: dict[str, Any], base_dir: Path) -> None:
+    def __init__(self, document: dict[str, Any], base_dir: Path, cancel_token: CancellationToken) -> None:
         super().__init__()
         self.document = document
         self.base_dir = base_dir
+        self.cancel_token = cancel_token
 
     @Slot()
     def run(self) -> None:
-        result = ExportService().execute(self.document, base_dir=self.base_dir, event_sink=self.progress.emit)
+        result = ExportService().execute(
+            self.document,
+            base_dir=self.base_dir,
+            event_sink=self.progress.emit,
+            cancel_token=self.cancel_token,
+        )
         self.finished.emit(result)
 
 
@@ -355,6 +362,7 @@ class SlideGuardWindow(QMainWindow):
         self._preview_running = False
         self._pending_preview = False
         self._export_running = False
+        self._export_token: CancellationToken | None = None
         self._preview_root = default_work_root() / f"preview-session-{uuid.uuid4().hex}"
         self._threads: set[QThread] = set()
         self._workers: set[QObject] = set()
@@ -511,6 +519,10 @@ class SlideGuardWindow(QMainWindow):
         self.export_button.clicked.connect(self._start_export)
         self.export_button.setEnabled(False)
         panel_layout.addWidget(self.export_button)
+        self.cancel_button = QPushButton("取消当前导出")
+        self.cancel_button.clicked.connect(self._cancel_export)
+        self.cancel_button.setEnabled(False)
+        panel_layout.addWidget(self.cancel_button)
         self.open_button = QPushButton("打开结果文件夹")
         self.open_button.clicked.connect(self._open_result)
         self.open_button.setEnabled(False)
@@ -875,17 +887,26 @@ class SlideGuardWindow(QMainWindow):
         if self._export_running:
             return
         self._export_running = True
+        self._export_token = CancellationToken()
         self._preview_timer.stop()
         self._pending_preview = False
         self._draft_timer.stop()
         if self._draft_dirty:
             self._save_draft()
         self.export_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
         self.open_button.setEnabled(False)
         self.status.setText("正在准备导出…")
-        worker = ExportWorker(self._request_document(), self._source.parent)
+        worker = ExportWorker(self._request_document(), self._source.parent, self._export_token)
         worker.progress.connect(self._export_progress)
         self._run_worker(worker, worker.run, self._export_finished)
+
+    def _cancel_export(self) -> None:
+        if not self._export_running or self._export_token is None:
+            return
+        self._export_token.cancel()
+        self.cancel_button.setEnabled(False)
+        self.status.setText("正在安全取消；当前步骤结束后不会发布结果…")
 
     def _export_progress(self, event: dict[str, Any]) -> None:
         phase = event.get("phase")
@@ -900,6 +921,8 @@ class SlideGuardWindow(QMainWindow):
 
     def _export_finished(self, result: dict[str, Any]) -> None:
         self._export_running = False
+        self._export_token = None
+        self.cancel_button.setEnabled(False)
         self._controls_changed()
         if result["status"] == "succeeded":
             self._draft_timer.stop()
@@ -910,6 +933,8 @@ class SlideGuardWindow(QMainWindow):
             self.open_button.setEnabled(True)
             verdict = result.get("verdict") or "完成"
             self.status.setText(f"导出完成：{verdict}\n{self._last_package}")
+        elif (result.get("error") or {}).get("code") == "CANCELLED":
+            self.status.setText("导出已取消，没有发布新的结果目录")
         else:
             error = result.get("error") or {}
             self.status.setText(f"导出失败：{error.get('code', 'ERROR')} — {error.get('message', '')}")

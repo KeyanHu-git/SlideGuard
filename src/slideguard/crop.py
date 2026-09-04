@@ -6,7 +6,7 @@ import numpy as np
 from PIL import Image
 
 from .errors import InputError
-from .geometry import NormalizedRect, effective_pixel_box, validate_expansion_percent
+from .geometry import NormalizedRect, ReferencePixelRect, effective_pixel_box, validate_expansion_percent
 
 
 PercentBox = tuple[float, float, float, float]
@@ -71,21 +71,8 @@ def crop_pixels(
 
 
 def pdf_box(pixel_box: tuple[int, int, int, int, int, int], page_width: float, page_height: float) -> list[float]:
-    left, top, right, bottom, width, height = pixel_box
-    return [
-        left * page_width / width,
-        page_height - bottom * page_height / height,
-        right * page_width / width,
-        page_height - top * page_height / height,
-    ]
+    return ReferencePixelRect.from_tuple(pixel_box).to_pdf_box(page_width, page_height)
 
 
 def svg_box(pixel_box: tuple[int, int, int, int, int, int], view_box: list[float]) -> list[float]:
-    left, top, right, bottom, width, height = pixel_box
-    vx, vy, vw, vh = view_box
-    return [
-        vx + left * vw / width,
-        vy + top * vh / height,
-        (right - left) * vw / width,
-        (bottom - top) * vh / height,
-    ]
+    return ReferencePixelRect.from_tuple(pixel_box).to_svg_box(view_box)

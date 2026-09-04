@@ -8,6 +8,7 @@ from .errors import InputError
 
 PercentBox = tuple[float, float, float, float]
 PixelBox = tuple[int, int, int, int, int, int]
+REFERENCE_PIXEL_TOLERANCE = 0.5
 
 
 def canonical_float(value: float | int) -> float:
@@ -66,6 +67,293 @@ class NormalizedRect:
             round(width * self.right),
             round(height * self.bottom),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class FloatRect:
+    """An axis-aligned rectangle in one explicitly named coordinate space."""
+
+    left: float
+    top: float
+    right: float
+    bottom: float
+
+    def __post_init__(self) -> None:
+        values = (self.left, self.top, self.right, self.bottom)
+        if not all(math.isfinite(value) for value in values):
+            raise InputError("Rectangle coordinates must be finite", stage="validation")
+        if self.left >= self.right or self.top >= self.bottom:
+            raise InputError("Rectangle must have positive width and height", stage="validation")
+
+    @property
+    def width(self) -> float:
+        return self.right - self.left
+
+    @property
+    def height(self) -> float:
+        return self.bottom - self.top
+
+    @property
+    def center(self) -> tuple[float, float]:
+        return ((self.left + self.right) / 2.0, (self.top + self.bottom) / 2.0)
+
+
+@dataclass(frozen=True, slots=True)
+class ViewportTransform:
+    """Pure mapping between reference pixels, fitted scene DIP and viewport DIP.
+
+    ``scene`` is the image after aspect-preserving fit at zoom 1, with its
+    top-left at (0, 0). ``viewport`` is a DIP rectangle and may be inset inside
+    a widget. Zoom is around the fitted image centre; pan is a DIP translation.
+    Device-pixel ratio is deliberately absent because input and layout geometry
+    must stay in device-independent pixels.
+    """
+
+    reference_width: int
+    reference_height: int
+    viewport: FloatRect
+    zoom: float = 1.0
+    pan_x_dip: float = 0.0
+    pan_y_dip: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.reference_width <= 0 or self.reference_height <= 0:
+            raise InputError("Reference dimensions must be positive", stage="validation")
+        values = (self.zoom, self.pan_x_dip, self.pan_y_dip)
+        if not all(math.isfinite(value) for value in values) or self.zoom <= 0:
+            raise InputError("Zoom must be positive and pan must be finite", stage="validation")
+
+    @property
+    def fit_scale(self) -> float:
+        return min(
+            self.viewport.width / self.reference_width,
+            self.viewport.height / self.reference_height,
+        )
+
+    @property
+    def scene_rect(self) -> FloatRect:
+        return FloatRect(
+            0.0,
+            0.0,
+            self.reference_width * self.fit_scale,
+            self.reference_height * self.fit_scale,
+        )
+
+    @property
+    def image_rect_in_viewport(self) -> FloatRect:
+        scene = self.scene_rect
+        viewport_cx, viewport_cy = self.viewport.center
+        width = scene.width * self.zoom
+        height = scene.height * self.zoom
+        center_x = viewport_cx + self.pan_x_dip
+        center_y = viewport_cy + self.pan_y_dip
+        return FloatRect(
+            center_x - width / 2.0,
+            center_y - height / 2.0,
+            center_x + width / 2.0,
+            center_y + height / 2.0,
+        )
+
+    def normalized_to_reference(self, point: tuple[float, float]) -> tuple[float, float]:
+        x, y = _finite_point(point)
+        return x * self.reference_width, y * self.reference_height
+
+    def reference_to_normalized(self, point: tuple[float, float]) -> tuple[float, float]:
+        x, y = _finite_point(point)
+        return x / self.reference_width, y / self.reference_height
+
+    def reference_to_scene(self, point: tuple[float, float]) -> tuple[float, float]:
+        x, y = _finite_point(point)
+        return x * self.fit_scale, y * self.fit_scale
+
+    def scene_to_reference(self, point: tuple[float, float]) -> tuple[float, float]:
+        x, y = _finite_point(point)
+        return x / self.fit_scale, y / self.fit_scale
+
+    def scene_to_viewport(self, point: tuple[float, float]) -> tuple[float, float]:
+        x, y = _finite_point(point)
+        scene_cx, scene_cy = self.scene_rect.center
+        viewport_cx, viewport_cy = self.viewport.center
+        return (
+            viewport_cx + self.pan_x_dip + (x - scene_cx) * self.zoom,
+            viewport_cy + self.pan_y_dip + (y - scene_cy) * self.zoom,
+        )
+
+    def viewport_to_scene(self, point: tuple[float, float]) -> tuple[float, float]:
+        x, y = _finite_point(point)
+        scene_cx, scene_cy = self.scene_rect.center
+        viewport_cx, viewport_cy = self.viewport.center
+        return (
+            scene_cx + (x - viewport_cx - self.pan_x_dip) / self.zoom,
+            scene_cy + (y - viewport_cy - self.pan_y_dip) / self.zoom,
+        )
+
+    def normalized_to_viewport(self, point: tuple[float, float]) -> tuple[float, float]:
+        return self.scene_to_viewport(self.reference_to_scene(self.normalized_to_reference(point)))
+
+    def viewport_to_normalized(
+        self,
+        point: tuple[float, float],
+        *,
+        clamp: bool = False,
+    ) -> tuple[float, float]:
+        normalized = self.reference_to_normalized(self.scene_to_reference(self.viewport_to_scene(point)))
+        if not clamp:
+            return normalized
+        return tuple(min(1.0, max(0.0, value)) for value in normalized)
+
+    def normalized_rect_to_viewport(self, rect: NormalizedRect) -> FloatRect:
+        left, top = self.normalized_to_viewport((rect.left, rect.top))
+        right, bottom = self.normalized_to_viewport((rect.right, rect.bottom))
+        return FloatRect(left, top, right, bottom)
+
+    def viewport_rect_to_normalized(self, rect: FloatRect) -> NormalizedRect:
+        left, top = self.viewport_to_normalized((rect.left, rect.top), clamp=True)
+        right, bottom = self.viewport_to_normalized((rect.right, rect.bottom), clamp=True)
+        return NormalizedRect(left, top, right, bottom)
+
+
+@dataclass(frozen=True, slots=True)
+class ReferencePixelRect:
+    """One exclusive-edge crop rectangle in a reference raster."""
+
+    left: int
+    top: int
+    right: int
+    bottom: int
+    reference_width: int
+    reference_height: int
+
+    def __post_init__(self) -> None:
+        if self.reference_width <= 0 or self.reference_height <= 0:
+            raise InputError("Reference dimensions must be positive", stage="validation")
+        if not (
+            0 <= self.left < self.right <= self.reference_width
+            and 0 <= self.top < self.bottom <= self.reference_height
+        ):
+            raise InputError("Pixel crop must be inside the reference image", stage="validation")
+
+    @classmethod
+    def from_tuple(cls, value: PixelBox) -> "ReferencePixelRect":
+        return cls(*value)
+
+    def to_tuple(self) -> PixelBox:
+        return (
+            self.left,
+            self.top,
+            self.right,
+            self.bottom,
+            self.reference_width,
+            self.reference_height,
+        )
+
+    def to_normalized(self) -> NormalizedRect:
+        return NormalizedRect.from_pixels(
+            self.left,
+            self.top,
+            self.right,
+            self.bottom,
+            self.reference_width,
+            self.reference_height,
+        )
+
+    def to_png_box(self) -> tuple[int, int, int, int]:
+        return self.left, self.top, self.right, self.bottom
+
+    def to_pdf_box(self, page_width: float, page_height: float) -> list[float]:
+        _positive_size(page_width, page_height, "PDF page")
+        return [
+            self.left * page_width / self.reference_width,
+            page_height - self.bottom * page_height / self.reference_height,
+            self.right * page_width / self.reference_width,
+            page_height - self.top * page_height / self.reference_height,
+        ]
+
+    def to_svg_box(self, source_view_box: list[float]) -> list[float]:
+        vx, vy, vw, vh = _view_box(source_view_box)
+        return [
+            vx + self.left * vw / self.reference_width,
+            vy + self.top * vh / self.reference_height,
+            (self.right - self.left) * vw / self.reference_width,
+            (self.bottom - self.top) * vh / self.reference_height,
+        ]
+
+
+def normalized_from_pdf_box(box: list[float], page_width: float, page_height: float) -> NormalizedRect:
+    """Convert a PDF y-up page box back to the canonical y-down rectangle."""
+    _positive_size(page_width, page_height, "PDF page")
+    if len(box) != 4 or not all(math.isfinite(float(value)) for value in box):
+        raise InputError("PDF box needs four finite values", stage="validation")
+    x0, y0, x1, y1 = (float(value) for value in box)
+    return NormalizedRect(
+        *(
+            _clamp_unit_roundoff(value)
+            for value in (
+                x0 / page_width,
+                1.0 - y1 / page_height,
+                x1 / page_width,
+                1.0 - y0 / page_height,
+            )
+        )
+    )
+
+
+def normalized_from_svg_box(box: list[float], source_view_box: list[float]) -> NormalizedRect:
+    """Convert an SVG crop viewBox back relative to its original viewBox."""
+    vx, vy, vw, vh = _view_box(source_view_box)
+    if len(box) != 4 or not all(math.isfinite(float(value)) for value in box):
+        raise InputError("SVG box needs four finite values", stage="validation")
+    x, y, width, height = (float(value) for value in box)
+    return NormalizedRect(
+        *(
+            _clamp_unit_roundoff(value)
+            for value in (
+                (x - vx) / vw,
+                (y - vy) / vh,
+                (x + width - vx) / vw,
+                (y + height - vy) / vh,
+            )
+        )
+    )
+
+
+def _clamp_unit_roundoff(value: float, *, tolerance: float = 1e-12) -> float:
+    """Clamp only arithmetic noise at the canonical 0..1 boundaries.
+
+    Real out-of-range boxes must still be rejected by ``NormalizedRect``;
+    this only absorbs the final ULP introduced by affine round trips.
+    """
+    if -tolerance <= value <= 0.0:
+        return 0.0
+    if 1.0 <= value <= 1.0 + tolerance:
+        return 1.0
+    return value
+
+
+def _finite_point(point: tuple[float, float]) -> tuple[float, float]:
+    if len(point) != 2:
+        raise InputError("Point needs two coordinates", stage="validation")
+    x, y = (float(value) for value in point)
+    if not math.isfinite(x) or not math.isfinite(y):
+        raise InputError("Point coordinates must be finite", stage="validation")
+    return x, y
+
+
+def _positive_size(width: float, height: float, label: str) -> tuple[float, float]:
+    width = float(width)
+    height = float(height)
+    if not math.isfinite(width) or not math.isfinite(height) or width <= 0 or height <= 0:
+        raise InputError(f"{label} dimensions must be positive and finite", stage="validation")
+    return width, height
+
+
+def _view_box(value: list[float]) -> tuple[float, float, float, float]:
+    if len(value) != 4:
+        raise InputError("SVG viewBox needs four values", stage="validation")
+    vx, vy, vw, vh = (float(item) for item in value)
+    if not all(math.isfinite(item) for item in (vx, vy, vw, vh)) or vw <= 0 or vh <= 0:
+        raise InputError("SVG viewBox dimensions must be positive and finite", stage="validation")
+    return vx, vy, vw, vh
 
 
 def validate_expansion_percent(value: PercentBox) -> None:

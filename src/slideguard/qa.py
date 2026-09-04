@@ -11,6 +11,7 @@ from PIL import Image
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import RectangleObject
 
+from .geometry import normalized_from_pdf_box
 from .model import FeatureInventory, Finding, Severity, Verdict
 from .svg_security import parse_svg, security_violations
 from .render import render_pdf, render_svg
@@ -176,12 +177,8 @@ def validate_svg_vector_invariant(svg: Path, native_svg: Path, inventory: Featur
 
 def _reference_crop(reference_png: Path, crop_box: list[float], page_width: float, page_height: float) -> Image.Image:
     image = Image.open(reference_png).convert("RGB")
-    x0, y0, x1, y1 = crop_box
-    left = round(image.width * x0 / page_width)
-    right = round(image.width * x1 / page_width)
-    top = round(image.height * (1 - y1 / page_height))
-    bottom = round(image.height * (1 - y0 / page_height))
-    return image.crop((left, top, right, bottom))
+    normalized = normalized_from_pdf_box(crop_box, page_width, page_height)
+    return image.crop(normalized.to_pixels(image.width, image.height))
 
 
 def _similarity(reference: Image.Image, candidate: Image.Image) -> tuple[float, float, float]:

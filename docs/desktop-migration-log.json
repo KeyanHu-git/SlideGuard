@@ -1,0 +1,194 @@
+[
+  {
+    "step": 1,
+    "action": "冻结审查基线，保留未知修改",
+    "command": "git status --short；git diff --stat",
+    "evidence": "基线4fd39eb；三份全NUL文件原样保留",
+    "pitfall": "不对来源不明的损坏文件执行恢复覆盖；隔离快照验收",
+    "issue": "https://linear.app/keyanhu/issue/KEY-263"
+  },
+  {
+    "step": 2,
+    "action": "检查界面、内核与依赖职责",
+    "command": "检查studio、application、geometry和portable清单",
+    "evidence": "Qt界面可替换；CropEditor和ExportService可复用",
+    "pitfall": "框架年龄不能证明设计好坏；不重写Office绘图",
+    "issue": "https://linear.app/keyanhu/issue/KEY-263"
+  },
+  {
+    "step": 3,
+    "action": "建立分层需求与验收阶段",
+    "command": "KEY-262下建立KEY-263至KEY-266",
+    "evidence": "审查、后台、工作区、交付各有完成条件",
+    "pitfall": "功能、视觉、发行分别验收，不能混为完成",
+    "issue": "https://linear.app/keyanhu/issue/KEY-262"
+  },
+  {
+    "step": 4,
+    "action": "准备隔离构建环境",
+    "command": "Node/npm；Rust MSVC；Python；依赖锁文件",
+    "evidence": "Node24.14.0；Rust1.98.1；Python3.12.14",
+    "pitfall": "缓存不放OneDrive；最小Rust安装不带rustfmt，需rustup component add rustfmt",
+    "issue": "https://linear.app/keyanhu/issue/KEY-266"
+  },
+  {
+    "step": 5,
+    "action": "建立无Qt后台协议",
+    "command": "python -m slideguard.desktop.server",
+    "evidence": "JSONL白名单、版本/ID、任务锁、资源ID",
+    "pitfall": "拒绝NaN/重复字段/过大请求；不开放网络服务",
+    "issue": "https://linear.app/keyanhu/issue/KEY-264"
+  },
+  {
+    "step": 6,
+    "action": "保留唯一裁剪计算模型",
+    "command": "DesktopSession调用CropEditor",
+    "evidence": "前端和导出共用归一化边界与不可变请求",
+    "pitfall": "不要让React重新计算一套导出裁剪公式",
+    "issue": "https://linear.app/keyanhu/issue/KEY-264"
+  },
+  {
+    "step": 7,
+    "action": "建立一体化桌面窗口",
+    "command": "npm run tauri build -- --debug --no-bundle",
+    "evidence": "Tauri原生窗口已启动，观察到自绘标题栏",
+    "pitfall": "Qt旧入口保留；开发预览不是默认发行",
+    "issue": "https://linear.app/keyanhu/issue/KEY-265"
+  },
+  {
+    "step": 8,
+    "action": "生成Windows图标后再构建",
+    "command": "npm run build",
+    "evidence": "TypeScript与Vite构建成功",
+    "pitfall": "首次cargo缺少icon.ico失败；构建脚本确定性生成",
+    "issue": "https://linear.app/keyanhu/issue/KEY-265"
+  },
+  {
+    "step": 9,
+    "action": "修正Windows路径重定向问题",
+    "command": "在解析后的LocalCache实际目录运行npm test",
+    "evidence": "Vitest坐标测试3项通过",
+    "pitfall": "逻辑AppData与真实路径混用造成模块无法解析",
+    "issue": "https://linear.app/keyanhu/issue/KEY-266"
+  },
+  {
+    "step": 10,
+    "action": "限制后台响应并防止请求乱序",
+    "command": "cargo test --features tauri/custom-protocol",
+    "evidence": "分帧测试2项通过；响应上限40MiB；读取超时30秒",
+    "pitfall": "连接损坏后不静默重启，避免旧界面冒充有效会话",
+    "issue": "https://linear.app/keyanhu/issue/KEY-276"
+  },
+  {
+    "step": 11,
+    "action": "让裁剪实时反馈并支持一步撤销",
+    "command": "pytest tests/test_desktop_server.py -q",
+    "evidence": "桌面专项18项通过；移动不累计漂移，取消恢复",
+    "pitfall": "每个手势固定起点；合并最新位置；手势中禁止换页",
+    "issue": "https://linear.app/keyanhu/issue/KEY-277"
+  },
+  {
+    "step": 12,
+    "action": "完整Python回归",
+    "command": "python -m pytest -q",
+    "evidence": "最终隔离副本全量364项通过；其中桌面专项18项",
+    "pitfall": "不能把隔离快照的结果写成受损工作树测试通过",
+    "issue": "https://linear.app/keyanhu/issue/KEY-266"
+  },
+  {
+    "step": 13,
+    "action": "真实源稿协议端到端测试",
+    "command": "python scripts/desktop_smoke.py <源稿> --output <已有目录>",
+    "evidence": "290秒；源哈希不变；保真PASS；完整性46项PASS",
+    "pitfall": "源稿、PNG/PDF和证据仅留本机，不提交代码仓库",
+    "issue": "https://linear.app/keyanhu/issue/KEY-266"
+  },
+  {
+    "step": 14,
+    "action": "构建无Qt冻结引擎",
+    "command": "python -m PyInstaller packaging/desktop-worker.spec",
+    "evidence": "worker 161.76MiB，316个文件，无Qt相关文件",
+    "pitfall": "Python图像与QA依赖仍占空间；不冒称整套只有几MB",
+    "issue": "https://linear.app/keyanhu/issue/KEY-279"
+  },
+  {
+    "step": 15,
+    "action": "测试冻结程序真实导出",
+    "command": "同一smoke命令增加--worker <slideguard-worker.exe>",
+    "evidence": "295.7秒；PDF2191867字节；紧凑SVG2163257字节；源稿不变",
+    "pitfall": "源码环境通过不能代替冻结程序验证；保留完整SVG",
+    "issue": "https://linear.app/keyanhu/issue/KEY-266"
+  },
+  {
+    "step": 16,
+    "action": "测量release候选目录",
+    "command": "npm run tauri build -- --no-bundle；主程序与worker同目录",
+    "evidence": "主程序5.90MiB；候选目录167.66MiB，317个文件",
+    "pitfall": "未包含Office/WebView2/外部渲染工具；未通过干净机器验收",
+    "issue": "https://linear.app/keyanhu/issue/KEY-279"
+  },
+  {
+    "step": 17,
+    "action": "记录实机交互范围",
+    "command": "启动工作区并检查窗口和控件",
+    "evidence": "窗口显示已验证；后续鼠标验证尚未完成",
+    "pitfall": "出现Windows安全选项页后停止UI输入，不代替用户操作",
+    "issue": "https://linear.app/keyanhu/issue/KEY-265"
+  },
+  {
+    "step": 18,
+    "action": "补足预览与QA差距",
+    "command": "KEY-278可见区域PDF渲染；KEY-275局部细线反例",
+    "evidence": "需求已登记，尚未实现与验收",
+    "pitfall": "放大4000px PNG不是矢量重渲染；全图指标可能忽略局部缺陷",
+    "issue": "https://linear.app/keyanhu/issue/KEY-278"
+  },
+  {
+    "step": 19,
+    "action": "同步文档与复现记录",
+    "command": "docs/desktop-migration.md；本表；JSON步骤日志",
+    "evidence": "旧架构标注历史，保留旧Excel工作表并追加本轮记录",
+    "pitfall": "只提交源码、锁文件和去隐私文档；不发布未经验收的正式版",
+    "issue": "https://linear.app/keyanhu/issue/KEY-263"
+  },
+  {
+    "step": 20,
+    "action": "修复GitHub工作流上下文",
+    "command": "job级env使用github.workspace，不引用runner.temp",
+    "evidence": "首次CI在启动job前失败；修正后job能启动",
+    "pitfall": "本地构建无法验证GitHub配置上下文；参考官方Contexts表",
+    "issue": "https://linear.app/keyanhu/issue/KEY-266"
+  },
+  {
+    "step": 21,
+    "action": "固定跨平台代码换行规范",
+    "command": ".gitattributes限定desktop/**为text eol=lf",
+    "evidence": "第二次CI定位到format:check；未关闭门禁",
+    "pitfall": "Windows检出CRLF与Prettier默认LF不一致；需要远端复跑",
+    "issue": "https://linear.app/keyanhu/issue/KEY-266"
+  },
+  {
+    "step": 22,
+    "action": "记录Linear新增数量限制",
+    "command": "继续更新已有KEY-266评论与本日志",
+    "evidence": "新增issue API返回免费工作区issue数量上限",
+    "pitfall": "未擅自升级套餐；额度恢复后再转子任务",
+    "issue": "https://linear.app/keyanhu/issue/KEY-266"
+  },
+  {
+    "step": 23,
+    "action": "验证Excel旧表不受影响",
+    "command": "比较值、合并区、样式、列宽行高；重跑生成表更新",
+    "evidence": "12个旧表未改；重复生成仍为13个表，不重复追加",
+    "pitfall": "openpyxl样式为代理；直接比较会假报差异，应比较copy.copy后的值",
+    "issue": "https://linear.app/keyanhu/issue/KEY-263"
+  },
+  {
+    "step": 24,
+    "action": "同步实际测试与提交的源码",
+    "command": "修正build.rs格式；从已提交Git快照整体刷新构建目录",
+    "evidence": "远端Rust格式检查定位到漏同步的build.rs",
+    "pitfall": "逐文件拷贝可能漏文件；本地验收必须对应实际提交内容",
+    "issue": "https://linear.app/keyanhu/issue/KEY-266"
+  }
+]

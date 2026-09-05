@@ -6,6 +6,7 @@ import numpy as np
 from PIL import Image
 
 from .errors import InputError
+from .geometry import NormalizedRect, ReferencePixelRect, effective_pixel_box, validate_expansion_percent
 
 
 PercentBox = tuple[float, float, float, float]
@@ -20,8 +21,7 @@ def validate_crop_percent(value: PercentBox | None) -> None:
 
 
 def validate_expand_percent(value: PercentBox) -> None:
-    if any(item < 0 or item > 100 for item in value):
-        raise InputError("expand-percent values must be between 0 and 100")
+    validate_expansion_percent(value)
 
 
 def crop_pixels(
@@ -38,10 +38,13 @@ def crop_pixels(
     image = np.asarray(Image.open(reference_png).convert("RGB"), dtype=np.int16)
     height, width = image.shape[:2]
     if crop_percent is not None:
-        left = round(width * crop_percent[0] / 100)
-        top = round(height * crop_percent[1] / 100)
-        right = round(width * crop_percent[2] / 100)
-        bottom = round(height * crop_percent[3] / 100)
+        return effective_pixel_box(
+            NormalizedRect.from_percent(crop_percent),
+            width,
+            height,
+            expand_percent=expand_percent,
+            padding_px=padding_px,
+        )
     else:
         corners = np.array([image[0, 0], image[0, -1], image[-1, 0], image[-1, -1]], dtype=np.int16)
         background = np.median(corners, axis=0)
@@ -68,21 +71,8 @@ def crop_pixels(
 
 
 def pdf_box(pixel_box: tuple[int, int, int, int, int, int], page_width: float, page_height: float) -> list[float]:
-    left, top, right, bottom, width, height = pixel_box
-    return [
-        left * page_width / width,
-        page_height - bottom * page_height / height,
-        right * page_width / width,
-        page_height - top * page_height / height,
-    ]
+    return ReferencePixelRect.from_tuple(pixel_box).to_pdf_box(page_width, page_height)
 
 
 def svg_box(pixel_box: tuple[int, int, int, int, int, int], view_box: list[float]) -> list[float]:
-    left, top, right, bottom, width, height = pixel_box
-    vx, vy, vw, vh = view_box
-    return [
-        vx + left * vw / width,
-        vy + top * vh / height,
-        (right - left) * vw / width,
-        (bottom - top) * vh / height,
-    ]
+    return ReferencePixelRect.from_tuple(pixel_box).to_svg_box(view_box)

@@ -1,5 +1,9 @@
 # Architecture
 
+The optional Qt Quick Studio adapter is specified in [studio-architecture.md](studio-architecture.md).
+It separates the editing model, display renderer and asynchronous application adapter.
+The Office rendering truth and independent delivery validators below remain unchanged.
+
 ## Trust model
 
 SlideGuard uses three kinds of truth because none is enough on its own.
@@ -61,4 +65,3 @@ An alpha PNG normally becomes an RGB image plus a grayscale mask in PDF/SVG. Sli
 ## Reproducibility
 
 The job ID includes the source SHA-256, normalized options and pipeline revision. Reports record tool version, Office version, executable paths, package hashes and every threshold. A rerun with the same inputs produces the same logical job ID; content hashes show any renderer drift.
-

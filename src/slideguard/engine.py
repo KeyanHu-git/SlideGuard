@@ -8,11 +8,22 @@ import subprocess
 import sys
 import uuid
 from dataclasses import asdict, dataclass
+from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
+from typing import Callable
 
 from . import PIPELINE_REVISION, __version__
-from .errors import BudgetError, EnvironmentError, FidelityError
+from .cancellation import CancellationToken
+from .checkpoint import (
+    CheckpointCursor,
+    CheckpointIdentity,
+    CheckpointJournal,
+    CheckpointPhase,
+    CheckpointStatus,
+)
+from .errors import BudgetError, CancelledError, EnvironmentError, FidelityError
 from .model import ArtifactRecord, Finding, JobReport, Severity, Verdict
+from .offline import offline_policy
 from .ooxml import PptxPackage
 from .pdf_pipeline import PdfPatchResult, restore_pdf_images
 from .powerpoint import export_reference, probe
@@ -21,6 +32,7 @@ from .reporting import write_reports
 from .render import svg_renderer_info
 from .svg_pipeline import SvgPatchResult, convert_pdf_to_svg, restore_svg_images
 from .util import checksum_lines, default_work_root, ensure_within, native_long_path, parse_slides, safe_slug, sha256_file, stable_json, utc_now, write_json
+from .workspace import create_owned_workspace, delete_owned_workspace, mark_workspace_complete
 
 
 @dataclass(slots=True)
@@ -40,16 +52,76 @@ class ExportOptions:
     strict: bool = True
 
 
-def doctor(work_root: Path | None = None) -> dict:
+@dataclass(frozen=True, slots=True)
+class ExportTaskModel:
+    """Stable export identity shared by execution and recovery planning."""
+
+    source: Path
+    source_sha256: str
+    slides: tuple[int, ...]
+    config: dict
+    request_fingerprint: str
+    slug: str
+    job_id: str
+    output_root: Path
+    final_dir: Path
+
+
+def build_export_task_model(
+    input_pptx: Path,
+    options: ExportOptions,
+    *,
+    slide_count: int | None = None,
+) -> ExportTaskModel:
+    """Derive the exact identity used by the export engine without starting PowerPoint."""
+    source = input_pptx.resolve()
+    if slide_count is None:
+        slide_count = PptxPackage.open(source).slide_count
+    slides = tuple(parse_slides(options.slides, slide_count))
+    source_sha256 = sha256_file(source)
+    config = asdict(options)
+    config["output_root"] = str(options.output_root) if options.output_root else None
+    config["dpis"] = list(options.dpis)
+    config["svg_widths"] = list(options.svg_widths)
+    config["pipeline_revision"] = PIPELINE_REVISION
+    config_hash = __import__("hashlib").sha256(stable_json(config).encode("utf-8")).hexdigest()
+    slug = safe_slug(source.stem)
+    job_id = f"{slug}--{source_sha256[:8]}--{config_hash[:8]}"
+    output_root = (options.output_root or (source.parent / "slideguard-output")).resolve()
+    return ExportTaskModel(
+        source=source,
+        source_sha256=source_sha256,
+        slides=slides,
+        config=config,
+        request_fingerprint=f"sha256:{config_hash}",
+        slug=slug,
+        job_id=job_id,
+        output_root=output_root,
+        final_dir=output_root / job_id,
+    )
+
+
+def doctor(
+    work_root: Path | None = None,
+    cancel_token: CancellationToken | None = None,
+    *,
+    probe_powerpoint: bool = True,
+) -> dict:
     from .util import require_executable
 
-    work_root = work_root or default_work_root() / "doctor"
+    owned_workspace = None
+    if work_root is None:
+        owned_workspace = create_owned_workspace(
+            default_work_root(), prefix="doctor", task_id="doctor", kind="doctor-workspace",
+        )
+        work_root = owned_workspace.path
     result = {
         "tool": {"name": "SlideGuard", "version": __version__},
         "platform": {"system": platform.system(), "release": platform.release(), "version": platform.version(), "machine": platform.machine()},
         "python": {"executable": sys.executable, "version": sys.version.split()[0]},
         "executables": {},
         "powerpoint": None,
+        "networkPolicy": offline_policy(),
         "ok": True,
         "errors": [],
     }
@@ -64,18 +136,36 @@ def doctor(work_root: Path | None = None) -> dict:
     except Exception as exc:
         result["ok"] = False
         result["errors"].append(str(exc))
-    try:
-        result["powerpoint"] = probe(work_root)
-    except Exception as exc:
-        result["ok"] = False
-        result["errors"].append(str(exc))
-    for module in ("lxml", "numpy", "PIL", "pypdf"):
+    if probe_powerpoint:
         try:
-            imported = __import__(module)
-            result.setdefault("pythonPackages", {})[module] = getattr(imported, "__version__", "present")
+            result["powerpoint"] = (
+                probe(work_root, cancel_token=cancel_token) if cancel_token else probe(work_root)
+            )
+        except CancelledError:
+            raise
         except Exception as exc:
             result["ok"] = False
+            result["errors"].append(str(exc))
+    else:
+        result["powerpointProbe"] = "deferred-to-export"
+    packages = {
+        "lxml": "lxml",
+        "numpy": "numpy",
+        "PIL": "Pillow",
+        "pypdf": "pypdf",
+        "jsonschema": "jsonschema",
+        "skimage": "scikit-image",
+    }
+    for module, distribution in packages.items():
+        try:
+            __import__(module)
+            result.setdefault("pythonPackages", {})[module] = package_version(distribution)
+        except (ImportError, PackageNotFoundError) as exc:
+            result["ok"] = False
             result["errors"].append(f"Python package {module}: {exc}")
+    if owned_workspace is not None and result["ok"]:
+        if mark_workspace_complete(owned_workspace):
+            delete_owned_workspace(owned_workspace)
     return result
 
 
@@ -144,55 +234,159 @@ def _relative_artifact(kind: str, path: Path, package_dir: Path, slide: int, pro
     return ArtifactRecord(kind, path.relative_to(package_dir).as_posix(), sha256_file(path), path.stat().st_size, slide, producer, metadata or {})
 
 
-def export_job(input_pptx: Path, options: ExportOptions) -> tuple[Path, JobReport]:
+def _checkpoint_tree(root: Path, kind: str) -> list[tuple[str, Path]]:
+    if not root.exists():
+        return []
+    return [(kind, path) for path in sorted(root.rglob("*")) if path.is_file()]
+
+
+def _check_cancel(cancel_token: CancellationToken | None) -> None:
+    if cancel_token:
+        cancel_token.throw_if_cancelled()
+
+
+def _publish_package(
+    package_dir: Path,
+    output_root: Path,
+    final_dir: Path,
+    job_id: str,
+    cancel_token: CancellationToken | None,
+) -> None:
+    output_root.mkdir(parents=True, exist_ok=True)
+    _check_cancel(cancel_token)
+    publish_dir = output_root / f".sg-publish-{uuid.uuid4().hex[:8]}"
+    try:
+        shutil.copytree(native_long_path(package_dir), native_long_path(publish_dir))
+        _check_cancel(cancel_token)
+        if final_dir.exists():
+            old_manifest = final_dir / "manifest.json"
+            if old_manifest.exists() and json.loads(old_manifest.read_text(encoding="utf-8"))["jobId"] == job_id:
+                return
+            raise FidelityError(f"Output collision: {final_dir}")
+        os.replace(native_long_path(publish_dir), native_long_path(final_dir))
+    finally:
+        if publish_dir.exists():
+            shutil.rmtree(native_long_path(publish_dir))
+
+
+def export_job(
+    input_pptx: Path,
+    options: ExportOptions,
+    *,
+    cancel_token: CancellationToken | None = None,
+    progress_callback: Callable[[str, str, str, int, int, int | None], None] | None = None,
+) -> tuple[Path, JobReport]:
+    def progress(
+        phase: str,
+        state: str,
+        message: str,
+        completed: int,
+        total: int,
+        slide: int | None = None,
+    ) -> None:
+        if progress_callback:
+            progress_callback(phase, state, message, completed, total, slide)
+
+    _check_cancel(cancel_token)
     source = input_pptx.resolve()
     package = PptxPackage.open(source)
-    slides = parse_slides(options.slides, package.slide_count)
-    source_hash_before = sha256_file(source)
-    config = asdict(options)
-    config["output_root"] = str(options.output_root) if options.output_root else None
-    config["dpis"] = list(options.dpis)
-    config["svg_widths"] = list(options.svg_widths)
-    config["pipeline_revision"] = PIPELINE_REVISION
-    config_hash = __import__("hashlib").sha256(stable_json(config).encode("utf-8")).hexdigest()
-    slug = safe_slug(source.stem)
-    job_id = f"{slug}--{source_hash_before[:8]}--{config_hash[:8]}"
-    work_dir = default_work_root() / f"{source_hash_before[:8]}-{config_hash[:8]}-{uuid.uuid4().hex[:6]}"
+    task = build_export_task_model(source, options, slide_count=package.slide_count)
+    slides = task.slides
+    _check_cancel(cancel_token)
+    source_hash_before = task.source_sha256
+    config = task.config
+    config_hash = task.request_fingerprint.removeprefix("sha256:")
+    slug = task.slug
+    job_id = task.job_id
+    owned_workspace = create_owned_workspace(
+        default_work_root(),
+        prefix=f"{source_hash_before[:8]}-{config_hash[:8]}",
+        task_id=job_id,
+        kind="export-workspace",
+    )
+    work_dir = owned_workspace.path
     package_dir = work_dir / "package"
     package_dir.mkdir(parents=True, exist_ok=False)
     (package_dir / "svg").mkdir()
     (package_dir / "png").mkdir()
     (package_dir / "evidence").mkdir()
+    checkpoint = CheckpointJournal(
+        owned_workspace,
+        CheckpointIdentity.create(
+            task_id=job_id,
+            workspace_nonce=owned_workspace.nonce,
+            request_fingerprint=task.request_fingerprint,
+            source_name=source.name,
+            source_sha256=source_hash_before,
+            tool_version=__version__,
+            pipeline_revision=PIPELINE_REVISION,
+        ),
+        slides,
+    )
+    checkpoint.advance(CheckpointPhase.DISCOVER)
 
-    environment = doctor(work_dir / "doctor")
+    progress("environment", "start", "Checking the export environment", 0, 1)
+    environment = doctor(
+        work_dir / "doctor", cancel_token=cancel_token, probe_powerpoint=False,
+    )
     if not environment["ok"]:
         raise EnvironmentError("; ".join(environment["errors"]))
+    checkpoint.advance(CheckpointPhase.PREFLIGHT)
+    progress("environment", "complete", "Export environment is ready", 1, 1)
+    _check_cancel(cancel_token)
     features = [package.inventory(slide) for slide in slides]
+    checkpoint.advance(CheckpointPhase.INVENTORY)
     findings: list[Finding] = []
     artifacts: list[ArtifactRecord] = []
     slide_manifest = []
 
     for ordinal, (slide, inventory) in enumerate(zip(slides, features), 1):
+        _check_cancel(cancel_token)
+        progress("slide", "start", f"Starting source slide {slide}", ordinal - 1, len(slides), slide)
         slide_work = work_dir / f"slide-{slide:04d}"
         slide_work.mkdir(parents=True)
-        export = export_reference(source, slide, slide_work, options.reference_width)
+        export = export_reference(
+            source, slide, slide_work, options.reference_width,
+            cancel_token=cancel_token,
+        )
+        if environment["powerpoint"] is None:
+            environment["powerpoint"] = export["powerpoint"]
+            environment["powerpointProbe"] = "verified-by-export"
+        cursor = CheckpointCursor(ordinal, slide)
+        checkpoint.advance(
+            CheckpointPhase.NATIVE_EXPORT,
+            cursor=cursor,
+            artifacts=[
+                ("native-pdf", Path(export["nativePdf"])),
+                ("reference-png", Path(export["referencePng"])),
+            ],
+        )
+        progress("powerpoint", "complete", f"PowerPoint rendered source slide {slide}", ordinal - 1, len(slides), slide)
+        _check_cancel(cancel_token)
         native_pdf = Path(export["nativePdf"])
         reference_png = Path(export["referencePng"])
         stem = f"{slug}--p{ordinal:04d}-s{slide:04d}"
         final_pdf = package_dir / f"{stem}.pdf"
         pdf_result, profile = _patch_pdf_with_budget(native_pdf, package, slide, reference_png, final_pdf, options)
+        progress("pdf", "complete", f"PDF prepared for source slide {slide}", ordinal - 1, len(slides), slide)
+        _check_cancel(cancel_token)
         artifacts.append(_relative_artifact("pdf", final_pdf, package_dir, slide, "powerpoint-native+image-restore", {**asdict(pdf_result), **profile}))
 
         raw_svg = slide_work / "powerpoint-native.svg"
         final_svg = package_dir / "svg" / f"{stem}.svg"
         convert_pdf_to_svg(native_pdf, raw_svg)
+        _check_cancel(cancel_token)
         svg_result = restore_svg_images(
             raw_svg, package, slide, reference_png, final_svg,
             padding_px=options.padding_px, crop_percent=options.crop_percent,
             expand_percent=options.expand_percent,
         )
+        progress("svg", "complete", f"SVG prepared for source slide {slide}", ordinal - 1, len(slides), slide)
+        _check_cancel(cancel_token)
         artifacts.append(_relative_artifact("svg", final_svg, package_dir, slide, "pdftocairo+image-restore", asdict(svg_result)))
 
+        compact_svg: Path | None = None
+        compact_evidence: Path | None = None
         if options.svg_max_bytes is not None:
             compact_dir = package_dir / "svg-compact"
             compact_dir.mkdir(exist_ok=True)
@@ -200,10 +394,25 @@ def export_job(input_pptx: Path, options: ExportOptions) -> tuple[Path, JobRepor
             compact_result, compact_profile = _patch_svg_with_budget(
                 raw_svg, package, slide, reference_png, compact_svg, options,
             )
+            _check_cancel(cancel_token)
             artifacts.append(_relative_artifact(
                 "svg-compact", compact_svg, package_dir, slide,
                 "pdftocairo+budgeted-image-restore", {**asdict(compact_result), **compact_profile},
             ))
+        patch_checkpoint_artifacts = [
+            ("pdf", final_pdf),
+            ("raw-svg", raw_svg),
+            ("svg", final_svg),
+        ]
+        if compact_svg is not None:
+            patch_checkpoint_artifacts.append(("svg-compact", compact_svg))
+        checkpoint.advance(
+            CheckpointPhase.PATCH,
+            cursor=cursor,
+            artifacts=patch_checkpoint_artifacts,
+        )
+
+        if compact_svg is not None:
             findings.extend(validate_svg_structure(compact_svg, inventory))
             findings.extend(validate_svg_vector_invariant(compact_svg, raw_svg, inventory))
             compact_evidence = package_dir / "evidence" / f"p{ordinal:04d}-s{slide:04d}-compact"
@@ -222,12 +431,14 @@ def export_job(input_pptx: Path, options: ExportOptions) -> tuple[Path, JobRepor
             final_pdf, native_pdf, evidence_dir, inventory, pdf_result.crop_box,
             float(export["slideWidthPt"]), float(export["slideHeightPt"]), list(options.dpis),
         ))
+        _check_cancel(cancel_token)
         svg_findings, png_source = validate_svg_renders(
             final_svg, evidence_dir, inventory, list(options.svg_widths),
             reference_png, pdf_result.crop_box,
             float(export["slideWidthPt"]), float(export["slideHeightPt"]),
         )
         findings.extend(svg_findings)
+        _check_cancel(cancel_token)
         final_png = package_dir / "png" / f"{stem}.png"
         shutil.copy2(png_source, final_png)
         artifacts.append(_relative_artifact("png", final_png, package_dir, slide, "accepted-svg-raster"))
@@ -240,8 +451,19 @@ def export_job(input_pptx: Path, options: ExportOptions) -> tuple[Path, JobRepor
                 severity=Severity.WARNING, message=f"{pdf_result.unmatched_images} large PDF image(s) were kept unchanged because no source match was safe",
                 validator="asset-stream@1.0", slide=slide, actual=pdf_result.unmatched_images,
             ))
+        validation_artifacts = [("png", final_png)]
+        validation_artifacts.extend(_checkpoint_tree(evidence_dir, "evidence"))
+        if compact_evidence is not None:
+            validation_artifacts.extend(_checkpoint_tree(compact_evidence, "evidence"))
+        checkpoint.advance(
+            CheckpointPhase.VALIDATE,
+            cursor=cursor,
+            artifacts=validation_artifacts,
+        )
         slide_manifest.append({"outputOrdinal": ordinal, "sourceSlide": slide, "slidePart": inventory.slide_part, "stem": stem})
+        progress("slide", "complete", f"Completed source slide {slide}", ordinal, len(slides), slide)
 
+    _check_cancel(cancel_token)
     source_hash_after = sha256_file(source)
     findings.append(Finding(
         code="SOURCE_IMMUTABLE", status=Verdict.PASS if source_hash_before == source_hash_after else Verdict.FAIL,
@@ -277,24 +499,27 @@ def export_job(input_pptx: Path, options: ExportOptions) -> tuple[Path, JobRepor
     write_reports(report, package_dir)
     checksum_targets = [path for path in package_dir.rglob("*") if path.is_file() and path.name != "checksums.sha256"]
     (package_dir / "checksums.sha256").write_text(checksum_lines(checksum_targets, package_dir), encoding="utf-8")
+    checkpoint.advance(
+        CheckpointPhase.PACKAGE,
+        artifacts=_checkpoint_tree(package_dir, "package-file"),
+    )
+    _check_cancel(cancel_token)
 
     if options.strict and verdict == Verdict.FAIL:
         raise FidelityError(f"QA failed; evidence remains at {package_dir}")
 
-    output_root = (options.output_root or (source.parent / "slideguard-output")).resolve()
-    output_root.mkdir(parents=True, exist_ok=True)
-    final_dir = output_root / job_id
-    publish_dir = output_root / f".sg-publish-{uuid.uuid4().hex[:8]}"
-    shutil.copytree(native_long_path(package_dir), native_long_path(publish_dir))
-    if final_dir.exists():
-        old_manifest = final_dir / "manifest.json"
-        if old_manifest.exists() and json.loads(old_manifest.read_text(encoding="utf-8"))["jobId"] == job_id:
-            shutil.rmtree(native_long_path(publish_dir))
-        else:
-            shutil.rmtree(native_long_path(publish_dir))
-            raise FidelityError(f"Output collision: {final_dir}")
-    else:
-        os.replace(native_long_path(publish_dir), native_long_path(final_dir))
+    output_root = task.output_root
+    final_dir = task.final_dir
+    progress("publication", "start", "Publishing the verified package", 0, 1)
+    checkpoint.advance(
+        CheckpointPhase.PUBLISH,
+        status=CheckpointStatus.PENDING,
+        artifacts=_checkpoint_tree(package_dir, "package-file"),
+    )
+    _publish_package(package_dir, output_root, final_dir, job_id, cancel_token)
+    checkpoint.advance(CheckpointPhase.PUBLISH)
+    progress("publication", "complete", "Verified package published", 1, 1)
     ensure_within(work_dir, default_work_root())
-    shutil.rmtree(work_dir)
+    if mark_workspace_complete(owned_workspace):
+        delete_owned_workspace(owned_workspace)
     return final_dir, report

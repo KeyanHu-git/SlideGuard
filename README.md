@@ -33,6 +33,26 @@ slideguard doctor
 
 ## One-click use
 
+A Tauri 2 + React desktop candidate is now being developed with a separate, Qt-free
+Python worker. It includes integrated window controls and direct crop/margin controls.
+It is not yet the default or a qualified portable release. The current preview uses
+PNG references; delivery-PDF zoom rendering and full interaction acceptance remain
+open. See [the migration audit and reproduction steps](docs/desktop-migration.md).
+
+The previous Qt Quick desktop remains available as a development entry point:
+
+```powershell
+py -m pip install -e ".[gui]"
+slideguard studio "figure.pptx"
+```
+
+Studio provides direct crop handles, pointer-anchored zoom, pan, linked margin sliders,
+live output bounds and separate parameter/quality checks. The PDF tab rerenders the
+delivered vector PDF through Qt PDF; the transparency tab shows the delivered PNG's
+alpha. It does not replace Office's authoring renderer or the independent QA engines.
+The old `slideguard gui` remains available while draft migration, multipage editing
+and portable-package acceptance are completed. See [the Studio architecture](docs/studio-architecture.md).
+
 Drag a `.pptx` file onto `SlideGuard.cmd`. The launcher exports slide 1 with PDF and compact-SVG limits of less than 2,500,000 bytes. It also keeps the full-size SVG. The output goes into a new `slideguard-output` folder beside the presentation.
 
 The command-line form gives full control:
@@ -42,6 +62,33 @@ slideguard export "figure.pptx" --slides 1 --pdf-max-bytes 2500000 --svg-max-byt
 slideguard export "deck.pptx" --slides 1,3-5
 slideguard export "deck.pptx" --slides all --out "D:\exports"
 ```
+
+The v0.2 development branch also has a visual Windows interface:
+
+```powershell
+py -m pip install -e ".[qa,gui]"
+slideguard gui
+```
+
+Open or drag in a PPTX, select the page, drag any of the four edges or four corners, and set each expansion edge independently. The blue line is the manual crop; the green dashed line is the effective output after expansion and fixed reference-pixel padding. Built-in choices cover tight crop, a 2% paper-safe margin plus 16 reference pixels, and the full page. You can save a named custom preset, keep a different crop on each page, or copy the current page's crop to a page range such as `2,4-6`. Every one of these controls writes the same `CropSpec`, which the visual interface passes to the same application service as the JSON entry point. See [docs/gui-crop-presets.md](docs/gui-crop-presets.md) for the stored formats and exact values. Safe mid-export cancellation and the installer remain release blockers and are not represented as finished features.
+
+SlideGuard serializes its own PowerPoint workers. If PowerPoint is already open, the worker does not quit that process: it opens the requested file read-only without a window, closes only that copy, and restores the previous automation-security setting. Mid-call timeout recovery still requires the Office runner gate before beta release.
+
+Automation and AI callers should use the versioned JSON interface. It writes exactly one result document to stdout and resolves paths in a JSON file relative to that file:
+
+```powershell
+slideguard job request.json
+slideguard export "figure.pptx" --slides 1 --json
+slideguard batch examples\batch-request.json
+```
+
+Set `behavior.dryRun` to `true` to validate the request, PPTX package and slide selection without opening PowerPoint or publishing files. The shipped request, result, error and progress schemas are documented in [docs/interface-contract-v0.2.md](docs/interface-contract-v0.2.md).
+
+Machine commands keep stdout to one strict JSON document. Output accidentally written by PowerPoint helpers, renderers, warnings, or native libraries is discarded; stderr receives only a small JSON summary with byte counts. Error text is redacted before serialization. `diagnose --out` is the exception: it writes the result to the named file and leaves stdout empty. See [docs/machine-output-contract.md](docs/machine-output-contract.md) for the command matrix and trust boundary.
+
+SlideGuard is offline-only by default. It contains no telemetry, automatic upload or update-check path, and every runtime entry point uses the same policy. A PPTX with any external OOXML relationship is rejected before PowerPoint opens it; exported SVG also rejects external resources. `slideguard doctor --json` records the policy in `networkPolicy`, and CI runs a static dependency/source audit plus socket-denial tests. See [docs/zero-egress-contract.md](docs/zero-egress-contract.md) for the exact boundary and reproducible checks.
+
+The batch entry accepts 1 to 100 independent requests and keeps output in input order. Its default `continue` strategy isolates a bad job and runs the rest. `fail-fast` leaves explicit skipped records. Safe reuse needs both the same source SHA-256 and the same normalized configuration; SlideGuard checks the published manifest, artifact hashes and `checksums.sha256` before returning a cached result. See [examples/batch-request.json](examples/batch-request.json) for a complete request.
 
 To crop like PowerPoint, give the four boundary positions as percentages of the slide. This keeps the area from 5% to 95% horizontally and 3% to 97% vertically:
 

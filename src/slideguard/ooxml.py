@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import io
 import posixpath
+import re
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from urllib.parse import unquote
 
 from lxml import etree
 from PIL import Image
@@ -23,10 +25,86 @@ NS = {
 }
 REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
 EMBED = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
+MAX_ARCHIVE_ENTRIES = 20_000
+MAX_ARCHIVE_BYTES = 4 * 1024 * 1024 * 1024
+MAX_PART_BYTES = 1024 * 1024 * 1024
+MAX_XML_BYTES = 64 * 1024 * 1024
+MAX_COMPRESSION_RATIO = 1_000
 
 
 def _parse(data: bytes) -> etree._Element:
-    return etree.fromstring(data, parser=etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=True))
+    if re.search(br"<!\s*(?:DOCTYPE|ENTITY)\b", data, flags=re.IGNORECASE):
+        raise InputError("OOXML parts must not declare DTDs or entities")
+    return etree.fromstring(data, parser=etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=False))
+
+
+def _canonical_part_name(name: str) -> str:
+    decoded = unquote(name)
+    if not decoded or "\\" in decoded or ":" in decoded or decoded.startswith("/"):
+        raise InputError(f"Unsafe OOXML part name: {name}")
+    pieces = decoded.split("/")
+    if any(piece in {"", ".", ".."} for piece in pieces):
+        raise InputError(f"Unsafe OOXML part name: {name}")
+    return "/".join(pieces).casefold()
+
+
+def _validate_archive(archive: zipfile.ZipFile) -> None:
+    entries = archive.infolist()
+    if len(entries) > MAX_ARCHIVE_ENTRIES:
+        raise InputError(f"PPTX contains more than {MAX_ARCHIVE_ENTRIES} ZIP entries")
+    total = 0
+    seen: set[str] = set()
+    for entry in entries:
+        if entry.is_dir():
+            continue
+        canonical = _canonical_part_name(entry.filename)
+        if canonical in seen:
+            raise InputError(f"PPTX contains a duplicate OOXML part: {entry.filename}")
+        seen.add(canonical)
+        if entry.file_size > MAX_PART_BYTES:
+            raise InputError(f"OOXML part is larger than {MAX_PART_BYTES} bytes: {entry.filename}")
+        total += entry.file_size
+        if total > MAX_ARCHIVE_BYTES:
+            raise InputError(f"PPTX expands beyond {MAX_ARCHIVE_BYTES} bytes")
+        if entry.file_size and entry.compress_size == 0:
+            raise InputError(f"OOXML part has an invalid zero compressed size: {entry.filename}")
+        if entry.compress_size and entry.file_size / entry.compress_size > MAX_COMPRESSION_RATIO:
+            raise InputError(f"OOXML part exceeds the compression-ratio limit: {entry.filename}")
+
+
+def _read_xml(archive: zipfile.ZipFile, name: str) -> etree._Element:
+    try:
+        entry = archive.getinfo(name)
+    except KeyError as exc:
+        raise InputError(f"PPTX is missing required OOXML part: {name}") from exc
+    if entry.file_size > MAX_XML_BYTES:
+        raise InputError(f"OOXML XML part is larger than {MAX_XML_BYTES} bytes: {name}")
+    return _parse(archive.read(entry))
+
+
+def _reject_external_relationships(archive: zipfile.ZipFile) -> None:
+    """Fail before PowerPoint can open a package that references remote content."""
+    relationship_types: set[str] = set()
+    count = 0
+    for entry in archive.infolist():
+        if entry.is_dir() or not entry.filename.casefold().endswith(".rels"):
+            continue
+        relationships = _read_xml(archive, entry.filename)
+        for relationship in relationships.xpath("//pr:Relationship", namespaces=NS):
+            if str(relationship.get("TargetMode", "")).casefold() != "external":
+                continue
+            count += 1
+            relation_type = str(relationship.get("Type", "unknown")).rstrip("/").rsplit("/", 1)[-1]
+            relationship_types.add(relation_type[:80] or "unknown")
+    if count:
+        raise InputError(
+            "PPTX contains external relationships; offline export refuses to open it in PowerPoint",
+            stage="offline-preflight",
+            details={
+                "externalRelationshipCount": count,
+                "relationshipTypes": sorted(relationship_types, key=str.casefold),
+            },
+        )
 
 
 def _rels_part(part: str) -> str:
@@ -35,9 +113,17 @@ def _rels_part(part: str) -> str:
 
 
 def _resolve_target(source_part: str, target: str) -> str:
-    if target.startswith("/"):
-        return target.lstrip("/")
-    return posixpath.normpath(posixpath.join(posixpath.dirname(source_part), target))
+    decoded = unquote(target)
+    if not decoded or "\\" in decoded or ":" in decoded:
+        raise InputError(f"Unsafe OOXML relationship target: {target}")
+    if decoded.startswith("/"):
+        resolved = decoded.lstrip("/")
+    else:
+        resolved = posixpath.normpath(posixpath.join(posixpath.dirname(source_part), decoded))
+    if resolved == ".." or resolved.startswith("../") or resolved.startswith("/"):
+        raise InputError(f"OOXML relationship escapes the package: {target}")
+    _canonical_part_name(resolved)
+    return resolved
 
 
 @dataclass(slots=True)
@@ -66,8 +152,10 @@ class PptxPackage:
             raise InputError(f"Not a PPTX file: {path}")
         try:
             with zipfile.ZipFile(path) as archive:
-                presentation = _parse(archive.read("ppt/presentation.xml"))
-                rels = _parse(archive.read("ppt/_rels/presentation.xml.rels"))
+                _validate_archive(archive)
+                _reject_external_relationships(archive)
+                presentation = _read_xml(archive, "ppt/presentation.xml")
+                rels = _read_xml(archive, "ppt/_rels/presentation.xml.rels")
                 relmap = {rel.get("Id"): rel.get("Target") for rel in rels.xpath("//pr:Relationship", namespaces=NS)}
                 slide_parts = []
                 for node in presentation.xpath("//p:sldIdLst/p:sldId", namespaces=NS):
@@ -88,11 +176,12 @@ class PptxPackage:
             raise InputError(f"Slide {slide_number} is outside 1..{self.slide_count}")
         part = self.slide_parts[slide_number - 1]
         with zipfile.ZipFile(self.path) as archive:
-            slide = _parse(archive.read(part))
+            _validate_archive(archive)
+            slide = _read_xml(archive, part)
             relmap: dict[str, tuple[str, str | None]] = {}
             rels_name = _rels_part(part)
             if rels_name in archive.namelist():
-                rels = _parse(archive.read(rels_name))
+                rels = _read_xml(archive, rels_name)
                 for rel in rels.xpath("//pr:Relationship", namespaces=NS):
                     relmap[rel.get("Id")] = (rel.get("Target", ""), rel.get("TargetMode"))
 
@@ -159,8 +248,9 @@ class PptxPackage:
         part = self.slide_parts[slide_number - 1]
         result = []
         with zipfile.ZipFile(self.path) as archive:
-            slide = _parse(archive.read(part))
-            rels = _parse(archive.read(_rels_part(part)))
+            _validate_archive(archive)
+            slide = _read_xml(archive, part)
+            rels = _read_xml(archive, _rels_part(part))
             relmap = {
                 rel.get("Id"): (rel.get("Target", ""), rel.get("TargetMode"))
                 for rel in rels.xpath("//pr:Relationship", namespaces=NS)

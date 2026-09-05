@@ -1,0 +1,6 @@
+{
+  "identifier": "main-window",
+  "description": "Local window controls only. No frontend shell, filesystem or remote URL access.",
+  "windows": ["main"],
+  "permissions": ["core:window:allow-start-dragging"]
+}

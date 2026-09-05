@@ -11,7 +11,9 @@ from PIL import Image
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import RectangleObject
 
+from .geometry import normalized_from_pdf_box
 from .model import FeatureInventory, Finding, Severity, Verdict
+from .svg_security import parse_svg, security_violations
 from .render import render_pdf, render_svg
 
 
@@ -80,8 +82,7 @@ def validate_pdf_structure(
 
 def validate_svg_structure(svg: Path, inventory: FeatureInventory) -> list[Finding]:
     findings: list[Finding] = []
-    parser = etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=True)
-    tree = etree.parse(str(svg), parser)
+    tree = parse_svg(svg)
     root = tree.getroot()
     local = etree.QName(root).localname
     viewbox = root.get("viewBox", "").replace(",", " ").split()
@@ -91,16 +92,7 @@ def validate_svg_structure(svg: Path, inventory: FeatureInventory) -> list[Findi
         "SVG parses and has a positive viewBox" if valid_viewbox else "SVG root/viewBox is invalid",
         "svg-structure@1.0", slide=inventory.slide,
     ))
-    external = []
-    for element in tree.iter():
-        for name, value in element.attrib.items():
-            local_name = etree.QName(name).localname
-            if local_name == "href" and not (value.startswith("data:") or value.startswith("#")):
-                external.append(value)
-            if local_name.lower().startswith("on"):
-                external.append(f"event:{local_name}")
-        if etree.QName(element).localname == "script":
-            external.append("script")
+    external = security_violations(tree)
     findings.append(_finding(
         "SEC_SVG_EXTERNAL_RESOURCE", not external,
         "SVG is self-contained and script-free" if not external else f"External/script references: {external[:3]}",
@@ -145,8 +137,7 @@ def validate_svg_structure(svg: Path, inventory: FeatureInventory) -> list[Findi
 
 
 def _svg_vector_hash(svg: Path) -> str:
-    parser = etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=True, remove_blank_text=True)
-    tree = etree.parse(str(svg), parser)
+    tree = parse_svg(svg)
     root = tree.getroot()
     viewbox = root.get("viewBox", "0 0 0 0").replace(",", " ").split()
     vx, vy, vw, vh = map(float, viewbox) if len(viewbox) == 4 else (0, 0, 0, 0)
@@ -186,15 +177,13 @@ def validate_svg_vector_invariant(svg: Path, native_svg: Path, inventory: Featur
 
 def _reference_crop(reference_png: Path, crop_box: list[float], page_width: float, page_height: float) -> Image.Image:
     image = Image.open(reference_png).convert("RGB")
-    x0, y0, x1, y1 = crop_box
-    left = round(image.width * x0 / page_width)
-    right = round(image.width * x1 / page_width)
-    top = round(image.height * (1 - y1 / page_height))
-    bottom = round(image.height * (1 - y0 / page_height))
-    return image.crop((left, top, right, bottom))
+    normalized = normalized_from_pdf_box(crop_box, page_width, page_height)
+    return image.crop(normalized.to_pixels(image.width, image.height))
 
 
 def _similarity(reference: Image.Image, candidate: Image.Image) -> tuple[float, float, float]:
+    from skimage.metrics import structural_similarity
+
     candidate = candidate.convert("RGB")
     reference = reference.convert("RGB").resize(candidate.size, Image.Resampling.LANCZOS)
     max_side = max(candidate.size)
@@ -206,11 +195,7 @@ def _similarity(reference: Image.Image, candidate: Image.Image) -> tuple[float, 
     first = np.asarray(reference, dtype=np.float32)
     second = np.asarray(candidate, dtype=np.float32)
     mae = float(np.mean(np.abs(first - second)) / 255.0)
-    try:
-        from skimage.metrics import structural_similarity
-        ssim = float(structural_similarity(first, second, channel_axis=2, data_range=255.0))
-    except Exception:
-        ssim = 1.0 - mae
+    ssim = float(structural_similarity(first, second, channel_axis=2, data_range=255.0))
     diff = np.max(np.abs(first - second), axis=2)
     mask = diff > 48
     row = mask.mean(axis=1)

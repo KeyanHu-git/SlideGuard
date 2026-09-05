@@ -1,8 +1,12 @@
 from pathlib import Path
 
+import pytest
+
+from slideguard.errors import InputError
 from slideguard.faults import inject_svg_fault
 from slideguard.model import FeatureInventory, Verdict
 from slideguard.qa import validate_svg_structure, validate_svg_vector_invariant
+from slideguard.svg_security import parse_svg
 
 
 BASE = """<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 100">
@@ -57,3 +61,41 @@ def test_vector_faults_change_exact_fingerprint(tmp_path: Path):
         inject_svg_fault(source, bad, fault)
         results = validate_svg_vector_invariant(bad, source, inventory())
         assert results[0].status == Verdict.FAIL
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '<foreignObject width="10" height="10"><div xmlns="http://www.w3.org/1999/xhtml">x</div></foreignObject>',
+        '<style>path{fill:url(https://example.invalid/a.svg)}</style>',
+        '<image width="10" height="10" xlink:href="data:text/html;base64,WA=="/>',
+        '<path d="M0 0" style="fill:url(file:///C:/secret.png)"/>',
+        '<a xlink:href="javascript:alert(1)"><path d="M0 0"/></a>',
+        '<path d="M0 0" onclick="alert(1)"/>',
+    ],
+)
+def test_svg_active_content_and_external_resource_variants_fail(tmp_path: Path, payload: str):
+    source = tmp_path / "unsafe.svg"
+    source.write_text(BASE.replace("</svg>", payload + "</svg>"), encoding="utf-8")
+    results = validate_svg_structure(source, inventory())
+    assert any(item.code == "SEC_SVG_EXTERNAL_RESOURCE" and item.status == Verdict.FAIL for item in results)
+
+
+def test_svg_dtd_is_rejected_before_xml_parsing(tmp_path: Path):
+    source = tmp_path / "dtd.svg"
+    source.write_text('<!DOCTYPE svg [<!ENTITY x "secret">]>' + BASE, encoding="utf-8")
+    with pytest.raises(InputError, match="must not declare DTDs"):
+        validate_svg_structure(source, inventory())
+
+
+def test_large_embedded_source_image_is_allowed_within_svg_size_cap(tmp_path: Path):
+    source = tmp_path / "large-image.svg"
+    payload = "A" * 10_500_000
+    source.write_text(
+        BASE.replace("</svg>", f'<image width="10" height="10" xlink:href="data:image/png;base64,{payload}"/></svg>'),
+        encoding="utf-8",
+    )
+
+    tree = parse_svg(source)
+
+    assert tree.getroot().tag.endswith("svg")

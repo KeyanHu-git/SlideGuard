@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "1.0",
+  "taskId": "paper-figure-001",
+  "input": "figure.pptx",
+  "slides": "1",
+  "outputRoot": "slideguard-output",
+  "crop": {
+    "mode": "manual",
+    "boundsPercent": {
+      "left": 5,
+      "top": 3,
+      "right": 95,
+      "bottom": 97
+    },
+    "expandPercent": {
+      "left": 1,
+      "top": 2,
+      "right": 1,
+      "bottom": 2
+    },
+    "paddingPx": 0
+  },
+  "quality": {
+    "referenceWidth": 4000,
+    "pdfMaxBytes": 2500000,
+    "pdfJpegQuality": 95,
+    "svgMaxBytes": 2500000,
+    "dpis": [72, 96, 120, 144, 192, 300, 600],
+    "svgWidths": [640, 1600, 3840]
+  },
+  "behavior": {
+    "strict": true,
+    "dryRun": false,
+    "progress": "jsonl"
+  }
+}

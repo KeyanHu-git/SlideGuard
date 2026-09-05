@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://slideguard.local/schemas/resume-plan.schema.json",
+  "title": "SlideGuard deterministic resume plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "kind",
+    "status",
+    "exitCode",
+    "planKey",
+    "taskId",
+    "resumeKey",
+    "requestFingerprint",
+    "source",
+    "selectedSlides",
+    "workspace",
+    "checkpoint",
+    "reusedThroughSequence",
+    "resumeFromSequence",
+    "publication",
+    "steps",
+    "error"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "1.0"},
+    "kind": {"const": "slideguard-resume-plan"},
+    "status": {"enum": ["resumable", "rejected"]},
+    "exitCode": {"enum": [0, 40]},
+    "planKey": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "taskId": {"type": "string", "minLength": 1, "maxLength": 256},
+    "resumeKey": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "requestFingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "sha256"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 255},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "selectedSlides": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10000,
+      "uniqueItems": true,
+      "items": {"type": "integer", "minimum": 1}
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "nonce", "disposition"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "nonce": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+        "disposition": {"const": "retained"}
+      }
+    },
+    "checkpoint": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["schemaVersion", "toolVersion", "pipelineRevision", "state", "complete"],
+          "properties": {
+            "schemaVersion": {"const": "1.0"},
+            "toolVersion": {"type": "string", "minLength": 1},
+            "pipelineRevision": {"type": "string", "minLength": 1},
+            "state": {"$ref": "#/$defs/state"},
+            "complete": {"type": "boolean"}
+          }
+        }
+      ]
+    },
+    "reusedThroughSequence": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "resumeFromSequence": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "publication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outputName", "action", "reasonCode"],
+      "properties": {
+        "outputName": {"type": "string", "minLength": 1},
+        "action": {"enum": ["publish-atomically", "reject"]},
+        "reasonCode": {"$ref": "#/$defs/reasonCode"}
+      }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 30005,
+      "items": {"$ref": "#/$defs/step"}
+    },
+    "error": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "stage"],
+          "properties": {
+            "code": {"$ref": "#/$defs/reasonCode"},
+            "stage": {"const": "resume-plan"}
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "resumable"}}},
+      "then": {
+        "properties": {
+          "exitCode": {"const": 0},
+          "checkpoint": {"type": "object"},
+          "resumeFromSequence": {"type": "integer"},
+          "publication": {
+            "properties": {"action": {"const": "publish-atomically"}}
+          },
+          "error": {"type": "null"}
+        }
+      },
+      "else": {
+        "properties": {
+          "exitCode": {"const": 40},
+          "reusedThroughSequence": {"type": "null"},
+          "resumeFromSequence": {"type": "null"},
+          "publication": {"properties": {"action": {"const": "reject"}}},
+          "error": {"type": "object"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "reasonCode": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{1,95}$"
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sequence", "phase", "status", "cursor"],
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 0},
+        "phase": {"$ref": "#/$defs/phase"},
+        "status": {"enum": ["pending", "complete"]},
+        "cursor": {"$ref": "#/$defs/cursor"}
+      }
+    },
+    "phase": {
+      "enum": ["DISCOVER", "PREFLIGHT", "INVENTORY", "NATIVE_EXPORT", "PATCH", "VALIDATE", "PACKAGE", "PUBLISH"]
+    },
+    "cursor": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["outputOrdinal", "sourceSlide"],
+          "properties": {
+            "outputOrdinal": {"type": "integer", "minimum": 1},
+            "sourceSlide": {"type": "integer", "minimum": 1}
+          }
+        }
+      ]
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "relativePath", "expectedBytes", "expectedSha256", "actualBytes", "actualSha256", "status"],
+      "properties": {
+        "kind": {"type": "string", "minLength": 1},
+        "relativePath": {"type": "string", "minLength": 1},
+        "expectedBytes": {"type": "integer", "minimum": 0},
+        "expectedSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "actualBytes": {"type": ["integer", "null"], "minimum": 0},
+        "actualSha256": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          ]
+        },
+        "status": {"enum": ["valid", "missing", "unreadable", "unsafe", "changed-during-read", "size-mismatch", "hash-mismatch"]}
+      }
+    },
+    "requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "relativePath", "minimum", "matched", "status"],
+      "properties": {
+        "kind": {"type": ["string", "null"]},
+        "relativePath": {"type": ["string", "null"]},
+        "minimum": {"type": "integer", "minimum": 1},
+        "matched": {"type": "integer", "minimum": 0},
+        "status": {"enum": ["pass", "fail", "not-checked"]}
+      }
+    },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sequence", "phase", "status", "cursor", "action", "reasonCode", "artifacts", "requirements"],
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 0},
+        "phase": {"$ref": "#/$defs/phase"},
+        "status": {"enum": ["pending", "complete"]},
+        "cursor": {"$ref": "#/$defs/cursor"},
+        "action": {"enum": ["reuse", "recompute", "reject"]},
+        "reasonCode": {"$ref": "#/$defs/reasonCode"},
+        "artifacts": {"type": "array", "items": {"$ref": "#/$defs/artifact"}},
+        "requirements": {"type": "array", "items": {"$ref": "#/$defs/requirement"}}
+      }
+    }
+  }
+}

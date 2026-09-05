@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/KeyanHu-git/SlideGuard/schemas/export-result-1.0.json",
+  "title": "SlideGuard ExportResult 1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "status", "exitCode", "toolVersion", "pipelineRevision", "configFingerprint", "effectiveSlides", "source", "output", "jobId", "verdict", "artifacts", "capabilities", "error"],
+  "properties": {
+    "schemaVersion": {"const": "1.0"},
+    "taskId": {"type": "string", "minLength": 1},
+    "status": {"enum": ["succeeded", "validated", "failed"]},
+    "exitCode": {"type": "integer", "minimum": 0},
+    "toolVersion": {"type": "string", "minLength": 1},
+    "pipelineRevision": {"type": "string", "minLength": 1},
+    "configFingerprint": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+    "effectiveSlides": {"type": "array", "items": {"type": "integer", "minimum": 1}, "uniqueItems": true},
+    "source": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "output": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["packagePath", "manifestPath", "reportPath"],
+      "properties": {
+        "packagePath": {"type": "string", "minLength": 1},
+        "manifestPath": {"type": "string", "minLength": 1},
+        "reportPath": {"type": "string", "minLength": 1}
+      }
+    },
+    "jobId": {"type": ["string", "null"]},
+    "verdict": {"enum": ["PASS", "PASS_WITH_SOURCE_WARNINGS", "FAIL", null]},
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "relativePath", "sha256", "bytes", "slide"],
+        "properties": {
+          "kind": {"type": "string", "minLength": 1},
+          "relativePath": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "bytes": {"type": "integer", "minimum": 0},
+          "slide": {"type": ["integer", "null"], "minimum": 1}
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vectorShapes", "originalRasterPreservation", "rasterToVector", "manualCrop", "perEdgeExpansion", "transparentSvgCanvas"],
+      "properties": {
+        "vectorShapes": {"type": "boolean"},
+        "originalRasterPreservation": {"type": "boolean"},
+        "rasterToVector": {"type": "boolean"},
+        "manualCrop": {"type": "boolean"},
+        "perEdgeExpansion": {"type": "boolean"},
+        "transparentSvgCanvas": {"type": "boolean"}
+      }
+    },
+    "error": {"$ref": "#/$defs/errorOrNull"}
+  },
+  "$defs": {
+    "errorOrNull": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["code", "message", "exitCode", "stage", "details"],
+      "properties": {
+        "code": {"type": "string", "minLength": 1},
+        "message": {"type": "string", "minLength": 1},
+        "exitCode": {"type": "integer", "minimum": 1},
+        "stage": {"type": "string", "minLength": 1},
+        "details": {"type": "object"}
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "status": {"const": "succeeded"},
+        "source": {"type": "object"},
+        "configFingerprint": {"type": "string"},
+        "effectiveSlides": {"minItems": 1},
+        "output": {"type": "object"},
+        "jobId": {"type": "string", "minLength": 1},
+        "verdict": {"enum": ["PASS", "PASS_WITH_SOURCE_WARNINGS", "FAIL"]},
+        "error": {"type": "null"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"verdict": {"const": "FAIL"}}, "required": ["verdict"]},
+          "then": {"properties": {"exitCode": {"const": 50}}},
+          "else": {"properties": {"exitCode": {"const": 0}}}
+        }
+      ]
+    },
+    {
+      "properties": {
+        "status": {"const": "validated"},
+        "exitCode": {"const": 0},
+        "source": {"type": "object"},
+        "configFingerprint": {"type": "string"},
+        "effectiveSlides": {"minItems": 1},
+        "output": {"type": "null"},
+        "jobId": {"type": "null"},
+        "verdict": {"type": "null"},
+        "artifacts": {"maxItems": 0},
+        "error": {"type": "null"}
+      }
+    },
+    {
+      "properties": {
+        "status": {"const": "failed"},
+        "exitCode": {"minimum": 1},
+        "output": {"type": "null"},
+        "jobId": {"type": "null"},
+        "verdict": {"type": "null"},
+        "artifacts": {"maxItems": 0},
+        "error": {"type": "object"}
+      }
+    }
+  ]
+}

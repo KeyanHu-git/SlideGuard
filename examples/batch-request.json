@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "1.0",
+  "batchId": "paper-figures-2026-09-04",
+  "jobs": [
+    {
+      "schemaVersion": "1.0",
+      "taskId": "main-figure-1",
+      "idempotencyKey": "paper-main-figure-1-v1",
+      "input": "../figures/main-figure.pptx",
+      "slides": "1",
+      "outputRoot": "../exports",
+      "crop": {
+        "mode": "auto",
+        "expandPercent": 1,
+        "paddingPx": 0
+      },
+      "quality": {
+        "pdfMaxBytes": 2500000,
+        "svgMaxBytes": 2500000
+      },
+      "behavior": {
+        "strict": true,
+        "dryRun": false,
+        "progress": "jsonl"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "taskId": "appendix-figure-a",
+      "input": "../figures/appendix.pptx",
+      "slides": "2",
+      "outputRoot": "../exports",
+      "behavior": {
+        "dryRun": false
+      }
+    }
+  ],
+  "behavior": {
+    "strategy": "continue",
+    "maxAttempts": 2,
+    "retryDelayMs": 500,
+    "reuseExisting": true
+  }
+}

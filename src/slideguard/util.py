@@ -19,6 +19,7 @@ WINDOWS_RESERVED = {
     *(f"COM{i}" for i in range(1, 10)),
     *(f"LPT{i}" for i in range(1, 10)),
 }
+MAX_SELECTED_SLIDES = 10_000
 
 
 def utc_now() -> str:
@@ -74,8 +75,16 @@ def parse_slides(spec: str, maximum: int | None = None) -> list[int]:
             start, end = map(int, parts)
             if start > end:
                 raise InputError(f"Descending slide range is not allowed: {token}")
+            if maximum is not None and end > maximum:
+                raise InputError(f"Slide {end} is outside 1..{maximum}")
+            if end - start + 1 > MAX_SELECTED_SLIDES or len(result) + end - start + 1 > MAX_SELECTED_SLIDES:
+                raise InputError(f"A request may select at most {MAX_SELECTED_SLIDES} slides")
             result.extend(range(start, end + 1))
         elif token.isdigit():
+            if maximum is not None and int(token) > maximum:
+                raise InputError(f"Slide {int(token)} is outside 1..{maximum}")
+            if len(result) >= MAX_SELECTED_SLIDES:
+                raise InputError(f"A request may select at most {MAX_SELECTED_SLIDES} slides")
             result.append(int(token))
         else:
             raise InputError(f"Invalid slide token: {token}")

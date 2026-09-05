@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/KeyanHu-git/SlideGuard/schemas/gui-crop-presets-1.json",
+  "title": "SlideGuard GUI crop presets 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["presetSchemaVersion", "presets"],
+  "properties": {
+    "presetSchemaVersion": {"const": 1},
+    "presets": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "crop"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1, "maxLength": 100},
+          "name": {"type": "string", "minLength": 1, "maxLength": 80},
+          "crop": {"$ref": "https://github.com/KeyanHu-git/SlideGuard/schemas/gui-crop-spec-1.json"}
+        }
+      }
+    }
+  }
+}

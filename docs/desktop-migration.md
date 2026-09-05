@@ -99,4 +99,6 @@ Codex Windows 容器可能把 LocalAppData 重定向到 Packages/LocalCache。Vi
 
 首次新增GitHub桌面工作流在任何job启动前失败。job级env不能引用runner上下文，已改用github.workspace；依据 [GitHub上下文可用范围](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#context-availability)。这类配置错误需要实际远端运行验证，本地构建不会发现。
 
+第二次远端运行实际启动后，格式检查因Windows检出换行符与Prettier默认LF不一致失败。新增限定到desktop及工作流的.gitattributes固定LF，没有修改全仓库的换行策略，也没有关闭格式检查。
+
 本轮后期Linear拒绝新增issue，返回工作区免费issue数量上限。没有升级套餐；后续发现先写入既有KEY-266评论和本日志，恢复新增额度后再补成子issue。

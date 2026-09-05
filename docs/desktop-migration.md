@@ -101,4 +101,6 @@ Codex Windows 容器可能把 LocalAppData 重定向到 Packages/LocalCache。Vi
 
 第二次远端运行实际启动后，格式检查因Windows检出换行符与Prettier默认LF不一致失败。新增限定到desktop及工作流的.gitattributes固定LF，没有修改全仓库的换行策略，也没有关闭格式检查。
 
+随后远端Rust格式检查发现build.rs未同步隔离构建目录中的格式化结果。修复后改从已提交的Git快照整体刷新构建源码，不再逐文件挑选复制，避免“测试目录通过、提交内容不同”。
+
 本轮后期Linear拒绝新增issue，返回工作区免费issue数量上限。没有升级套餐；后续发现先写入既有KEY-266评论和本日志，恢复新增额度后再补成子issue。

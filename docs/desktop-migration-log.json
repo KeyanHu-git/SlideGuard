@@ -150,5 +150,45 @@
     "evidence": "旧架构标注历史，保留旧Excel工作表并追加本轮记录",
     "pitfall": "只提交源码、锁文件和去隐私文档；不发布未经验收的正式版",
     "issue": "https://linear.app/keyanhu/issue/KEY-263"
+  },
+  {
+    "step": 20,
+    "action": "修复GitHub工作流上下文",
+    "command": "job级env使用github.workspace，不引用runner.temp",
+    "evidence": "首次CI在启动job前失败；修正后job能启动",
+    "pitfall": "本地构建无法验证GitHub配置上下文；参考官方Contexts表",
+    "issue": "https://linear.app/keyanhu/issue/KEY-266"
+  },
+  {
+    "step": 21,
+    "action": "固定跨平台代码换行规范",
+    "command": ".gitattributes限定desktop/**为text eol=lf",
+    "evidence": "第二次CI定位到format:check；未关闭门禁",
+    "pitfall": "Windows检出CRLF与Prettier默认LF不一致；需要远端复跑",
+    "issue": "https://linear.app/keyanhu/issue/KEY-266"
+  },
+  {
+    "step": 22,
+    "action": "记录Linear新增数量限制",
+    "command": "继续更新已有KEY-266评论与本日志",
+    "evidence": "新增issue API返回免费工作区issue数量上限",
+    "pitfall": "未擅自升级套餐；额度恢复后再转子任务",
+    "issue": "https://linear.app/keyanhu/issue/KEY-266"
+  },
+  {
+    "step": 23,
+    "action": "验证Excel旧表不受影响",
+    "command": "比较值、合并区、样式、列宽行高；重跑生成表更新",
+    "evidence": "12个旧表未改；重复生成仍为13个表，不重复追加",
+    "pitfall": "openpyxl样式为代理；直接比较会假报差异，应比较copy.copy后的值",
+    "issue": "https://linear.app/keyanhu/issue/KEY-263"
+  },
+  {
+    "step": 24,
+    "action": "同步实际测试与提交的源码",
+    "command": "修正build.rs格式；从已提交Git快照整体刷新构建目录",
+    "evidence": "远端Rust格式检查定位到漏同步的build.rs",
+    "pitfall": "逐文件拷贝可能漏文件；本地验收必须对应实际提交内容",
+    "issue": "https://linear.app/keyanhu/issue/KEY-266"
   }
 ]

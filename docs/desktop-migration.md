@@ -96,3 +96,7 @@ Python DesktopSession：任务互斥、资源白名单、结果归属
 本轮按步骤记录在 `docs/desktop-migration-log.json`，并补充到原有复现手册，不另建零散手册。`scripts/update_desktop_workbook.mjs` 只新增或重建本轮生成的工作表，不修改旧工作表；本轮表的修订先改JSON，不直接在生成表中维护。先导出到本机审核目录，验证旧工作表内容与格式未受影响后再替换文档。原版备份保留在本机构建资料目录，不放进项目根。
 
 Codex Windows 容器可能把 LocalAppData 重定向到 Packages/LocalCache。Vite/Vitest 对逻辑路径和真实路径混用会出现“文件存在但无法加载”；本次 Vitest 改从解析后的真实目录运行后通过。不要通过移动用户源码或放宽测试断言来掩盖该问题。
+
+首次新增GitHub桌面工作流在任何job启动前失败。job级env不能引用runner上下文，已改用github.workspace；依据 [GitHub上下文可用范围](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#context-availability)。这类配置错误需要实际远端运行验证，本地构建不会发现。
+
+本轮后期Linear拒绝新增issue，返回工作区免费issue数量上限。没有升级套餐；后续发现先写入既有KEY-266评论和本日志，恢复新增额度后再补成子issue。

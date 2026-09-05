@@ -12,7 +12,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/slideguard-desktop-target
+      CARGO_TARGET_DIR: ${{ github.workspace }}/desktop-target
     defaults:
       run:
         working-directory: desktop

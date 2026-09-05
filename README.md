@@ -33,7 +33,13 @@ slideguard doctor
 
 ## One-click use
 
-The Qt Quick desktop redesign is available as a development entry point:
+A Tauri 2 + React desktop candidate is now being developed with a separate, Qt-free
+Python worker. It includes integrated window controls and direct crop/margin controls.
+It is not yet the default or a qualified portable release. The current preview uses
+PNG references; delivery-PDF zoom rendering and full interaction acceptance remain
+open. See [the migration audit and reproduction steps](docs/desktop-migration.md).
+
+The previous Qt Quick desktop remains available as a development entry point:
 
 ```powershell
 py -m pip install -e ".[gui]"

@@ -15,3 +15,7 @@ docs/*.xlsx
 *.svg
 !docs/*.svg
 !src/slideguard/studio/qml/checker.svg
+node_modules/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/src-tauri/icons/icon.ico

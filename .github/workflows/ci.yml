@@ -8,6 +8,26 @@ permissions:
   contents: read
 
 jobs:
+  desktop:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/slideguard-desktop-target
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+      - run: node --version
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm test
+      - run: npm run build
+      - run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt
+      - run: cargo +1.98.1 fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - run: cargo +1.98.1 test --locked --manifest-path src-tauri/Cargo.toml --features tauri/custom-protocol
+      - run: cargo +1.98.1 build --locked --release --manifest-path src-tauri/Cargo.toml --features tauri/custom-protocol
+
   unit:
     runs-on: windows-latest
     strategy:

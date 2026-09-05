@@ -128,6 +128,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     gui_parser = sub.add_parser("gui", help="Open the visual crop and export window")
     gui_parser.add_argument("input", nargs="?", type=Path, default=None)
+    studio_parser = sub.add_parser("studio", help="Open the Qt Quick Studio development interface")
+    studio_parser.add_argument("input", nargs="?", type=Path, default=None)
 
     verify_parser = sub.add_parser("verify", help="Verify hashes in an existing package")
     verify_parser.add_argument("manifest", type=Path)
@@ -563,6 +565,12 @@ def main(argv: list[str] | None = None) -> int:
             return int(plan["exitCode"])
         if args.command == "diagnose":
             return _run_diagnose(args)
+        if args.command == "studio":
+            try:
+                from .studio.app import run_studio
+            except ImportError as exc:
+                raise EnvironmentError("Studio requires the gui extra", stage="environment") from exc
+            return run_studio(args.input)
         if args.command == "gui":
             try:
                 from .gui import run_gui

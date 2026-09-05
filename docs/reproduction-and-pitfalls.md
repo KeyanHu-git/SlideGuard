@@ -213,3 +213,36 @@ Cause: on Windows, the Edge/Chrome launcher process is not a reliable completion
 Fix: keep the HTML source and unique browser profile alive until the PNG both fully decodes and has the exact expected dimensions. Then copy the completed evidence image and retry removal of the exact temporary profile while the child releases its handles. Browser background networking, sync and component updates are disabled; launcher success alone is never treated as render success.
 
 Proof: unit tests cover delayed creation, incomplete/absent output, wrong dimensions and transient profile locks. The real compact SVG must render successfully at 640, 1600 and 3840 pixels. Linear: KEY-213.
+
+## 27. Numeric controls and green test suites do not prove usable cropping
+
+The 2026-09-05 GUI trial found a default 5% manual crop under an automatic-preset label,
+invisible automatic output bounds, and settings that could change while an export used
+an older snapshot. Do not resolve these defects by relabeling the same panel.
+
+Studio starts in automatic mode and calls the existing crop detector on a 4000px
+Office reference. Crop handles and margin sliders edit one CropSpec; display zoom
+does not change it. Each gesture is one undo transaction. Source/parameter changes
+are locked while workers run. Parameter validation, fidelity QA and package integrity
+remain separate operations. Track regression coverage in KEY-240–248.
+
+## 28. Check source bytes before assuming an import failure is an environment issue
+
+Before this redesign, three uncommitted files had become entirely NUL-filled:
+engine.py (23,221 bytes), execution.py (2,627 bytes), and test_execution.py (2,235 bytes).
+All had modification time 2026-09-05 01:27:18. Python correctly rejected engine.py.
+This is not an encoding diagnosis; no original source text remains in those bytes.
+
+Preserve the files and request approval before replacing uncommitted work. Until
+recovery is authorized, validate Studio in an isolated Git 4679dad snapshot with only
+the new Studio changes overlaid. Report that baseline explicitly. Do not attribute
+the corruption to OneDrive, a tool or a person without additional evidence. KEY-249.
+
+## 29. QML syntax and zoomed backgrounds need real component tests
+
+A semicolon after a JavaScript signal-handler block made the QML component fail to
+load; the offscreen engine test caught it. Keep QML warnings and failed root-object
+creation as test failures. Do not use an ever-growing Canvas bitmap for a checkerboard
+at high zoom: tile a fixed 32px texture instead. Cap delivered-PDF image requests at
+4096px per edge and disclose that cap; arbitrary high-zoom detail needs a later tiled
+renderer, not a claim that stretching the current texture adds detail.

@@ -14,3 +14,4 @@ docs/*.xlsx
 *.png
 *.svg
 !docs/*.svg
+!src/slideguard/studio/qml/checker.svg

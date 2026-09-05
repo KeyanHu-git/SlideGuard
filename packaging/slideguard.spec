@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(SPEC).resolve().parents[1]
 
 datas = collect_data_files(
     "slideguard",
-    includes=["resources/*.ps1", "schemas/*.json"],
+    includes=["resources/*.ps1", "schemas/*.json", "studio/qml/*.qml", "studio/qml/*.svg"],
 )
 for distribution in (
     "CairoSVG",
@@ -24,6 +24,11 @@ for distribution in (
     datas += copy_metadata(distribution)
 hiddenimports = [
     "slideguard.gui",
+    "slideguard.studio.app",
+    "PySide6.QtQml",
+    "PySide6.QtQuick",
+    "PySide6.QtQuickControls2",
+    "PySide6.QtPdf",
     "PySide6.QtCore",
     "PySide6.QtGui",
     "PySide6.QtWidgets",

@@ -33,6 +33,20 @@ slideguard doctor
 
 ## One-click use
 
+The Qt Quick desktop redesign is available as a development entry point:
+
+```powershell
+py -m pip install -e ".[gui]"
+slideguard studio "figure.pptx"
+```
+
+Studio provides direct crop handles, pointer-anchored zoom, pan, linked margin sliders,
+live output bounds and separate parameter/quality checks. The PDF tab rerenders the
+delivered vector PDF through Qt PDF; the transparency tab shows the delivered PNG's
+alpha. It does not replace Office's authoring renderer or the independent QA engines.
+The old `slideguard gui` remains available while draft migration, multipage editing
+and portable-package acceptance are completed. See [the Studio architecture](docs/studio-architecture.md).
+
 Drag a `.pptx` file onto `SlideGuard.cmd`. The launcher exports slide 1 with PDF and compact-SVG limits of less than 2,500,000 bytes. It also keeps the full-size SVG. The output goes into a new `slideguard-output` folder beside the presentation.
 
 The command-line form gives full control:

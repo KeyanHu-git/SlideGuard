@@ -29,13 +29,14 @@ dev = ["pytest>=8.0", "build>=1.2"]
 [project.scripts]
 slideguard = "slideguard.cli:main"
 slideguard-gui = "slideguard.gui_launcher:main"
+slideguard-studio = "slideguard.studio.app:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 include-package-data = true
 
 [tool.setuptools.package-data]
-slideguard = ["resources/*.ps1", "schemas/*.json"]
+slideguard = ["resources/*.ps1", "schemas/*.json", "studio/qml/*.qml", "studio/qml/*.svg"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

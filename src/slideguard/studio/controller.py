@@ -53,7 +53,7 @@ class StudioController(QObject):
         self.view_url = ""
         self.view_kind = "source"
         self.view_width, self.view_height = 4000, 2250
-        self.status = "打开 PPTX，先看清边界，再导出"
+        self.status = "打开 PowerPoint 文件"
         self.check_status = "尚未检查参数"
         self.result_summary = "尚未导出。预览不代表最终保真验收。"
         self.results: dict[str, Path] = {}
@@ -84,6 +84,7 @@ class StudioController(QObject):
             "ready": self.editor.ready, "busy": bool(self._busy), "operation": self._busy,
             "status": self.status, "elapsed": self._elapsed,
             "previewUrl": self.view_url, "viewKind": self.view_kind,
+            "sourcePreviewUrl": self.preview_url,
             "imageWidth": self.view_width, "imageHeight": self.view_height,
             "mode": self.editor.crop.mode,
             "bounds": list(self.editor.crop.bounds_percent),
@@ -145,7 +146,8 @@ class StudioController(QObject):
                 self.preview_url = self.provider.register(Path(value["path"]))
                 self.view_url, self.view_kind = self.preview_url, "source"
                 self.view_width, self.view_height = self.editor.width, self.editor.height
-                self.status = "参考图已就绪 · 紫框为裁剪范围，绿框为最终输出范围"
+                self.check_status = "尚未检查参数"
+                self.status = "源图已就绪 · 拖动蓝框裁剪，绿色外框为输出范围"
             elif kind == "check":
                 if value["status"] != "validated":
                     raise ValueError((value.get("error") or {}).get("message", "参数检查失败"))

@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -6,10 +7,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 
 pytest.importorskip("PySide6")
-from PySide6.QtCore import QObject, QSize, QUrl, qInstallMessageHandler
+from PySide6.QtCore import QObject, QSize, QUrl, QPointF, qInstallMessageHandler
 from PySide6.QtGui import QImage
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication
+from PySide6.QtQuick import QQuickItem
 
 from slideguard.studio.controller import StudioController
 from slideguard.studio.rendering import LocalPreviewProvider, bounded_size
@@ -100,3 +102,78 @@ def test_pdf_provider_rerenders_vectors_at_requested_resolution(app, tmp_path):
     assert low.size() == QSize(400, 200)
     assert high.size() == QSize(1600, 800)
     assert high.pixelColor(800, 400).value() < 30
+
+
+@pytest.mark.parametrize("dimensions", [(1000, 700), (1400, 880)])
+@pytest.mark.parametrize("mode", ["empty", "source", "busy", "alpha"])
+def test_design_workbench_state_and_layout(app, tmp_path, dimensions, mode):
+    errors = []
+    previous = qInstallMessageHandler(lambda kind, context, message: errors.append(message))
+    engine = QQmlApplicationEngine()
+    provider = LocalPreviewProvider()
+    controller = StudioController(provider)
+    if mode != "empty":
+        path = tmp_path / "reference.png"
+        reference = QImage(1000, 600, QImage.Format.Format_ARGB32)
+        reference.fill(0xffffffff)
+        assert reference.save(str(path))
+        controller.editor.install_reference((100, 100, 900, 500, 1000, 600))
+        controller.source = Path("a-long-document-name-that-must-not-push-the-toolbar.pptx")
+        controller.pages = 2
+        controller.preview_url = controller.view_url = provider.register(path)
+        controller.view_width, controller.view_height = 1000, 600
+        if mode == "busy":
+            controller._busy = "export"
+        if mode == "alpha":
+            controller.view_kind = "alpha"
+            controller.result_package = tmp_path
+    engine.addImageProvider("localpreview", provider)
+    engine.rootContext().setContextProperty("studio", controller)
+    try:
+        engine.load(QUrl.fromLocalFile(str(Path(studio_app.__file__).parent / "qml" / "Main.qml")))
+        assert engine.rootObjects(), errors
+        root = engine.rootObjects()[0]
+        root.setWidth(dimensions[0])
+        root.setHeight(dimensions[1])
+        # Yield the Python GIL as the asynchronous image provider enters Python.
+        # QTest.qWait alone can leave it blocked while engine teardown waits on it.
+        for _ in range(30):
+            app.processEvents()
+            time.sleep(0.01)
+        viewport = root.findChild(QQuickItem, "cropViewport")
+        assert viewport.width() > 400 and viewport.height() > 450
+        for name in ("documentBar", "canvasToolbar", "exportDock", "checkButton", "exportButton"):
+            item = root.findChild(QQuickItem, name)
+            assert item is not None and item.isVisible(), name
+            position = item.mapToScene(QPointF(0, 0))
+            assert position.x() >= 0 and position.y() >= 0, name
+            assert position.x() + item.width() <= root.width() + 1, name
+            assert position.y() + item.height() <= root.height() + 1, name
+        export = root.findChild(QQuickItem, "exportButton")
+        assert export.isEnabled() == (mode != "empty")
+        assert root.findChild(QQuickItem, "checkButton").isEnabled() == (mode in ("source", "alpha"))
+        assert export.property("text") == ("取消导出" if mode == "busy" else "导出并验收")
+        if mode != "empty":
+            # The source thumbnail must remain independent of the delivered preview.
+            assert controller.state["sourcePreviewUrl"] == controller.preview_url
+        if mode == "source":
+            before = controller.editor.state
+            viewport.fitContent()
+            for _ in range(10):
+                app.processEvents()
+                time.sleep(0.01)
+            rect = controller.editor.effective
+            scale = viewport.property("fit") * viewport.property("zoom")
+            center_x = (rect.left + rect.right) / 2 * 1000
+            center_y = (rect.top + rect.bottom) / 2 * 600
+            assert abs((center_x - 500) * scale + viewport.property("panX")) < 0.01
+            assert abs((center_y - 300) * scale + viewport.property("panY")) < 0.01
+            assert controller.editor.state == before
+        assert not [m for m in errors if any(s in m for s in ("Error", "is not defined", "Unable to assign", "Binding loop", "failed to load"))], errors
+    finally:
+        controller._busy = ""
+        if engine.rootObjects():
+            engine.rootObjects()[0].close()
+        engine.deleteLater()
+        app.processEvents()
+        qInstallMessageHandler(previous)

@@ -9,16 +9,22 @@ ApplicationWindow {
     minimumWidth: 1000
     minimumHeight: 700
     visible: true
-    title: "SlideGuard Studio · 可视导出工作台（开发版）"
-    color: "#f4f6f8"
+    title: "SlideGuard Studio · 设计预览"
+    color: theme.surface
     font.family: "Microsoft YaHei UI"
-    font.pixelSize: 13
+    font.pixelSize: theme.body
+    palette.windowText: theme.ink
+    palette.text: theme.ink
+    palette.highlight: theme.accent
+    Theme {
+        id: theme
+    }
     property var doc: studio.state
     property bool linked: true
+    readonly property bool editing: doc.ready && !doc.busy && doc.viewKind === "source"
     onClosing: close => {
         close.accepted = studio.canClose();
     }
-
     Shortcut {
         sequence: "Ctrl+O"
         enabled: !doc.busy
@@ -26,180 +32,269 @@ ApplicationWindow {
     }
     Shortcut {
         sequence: "Ctrl+Z"
-        enabled: !doc.busy
+        enabled: window.editing
         onActivated: studio.undo(false)
     }
     Shortcut {
         sequence: "Ctrl+Shift+Z"
-        enabled: !doc.busy
+        enabled: window.editing
         onActivated: studio.undo(true)
     }
     Shortcut {
         sequence: "Ctrl+0"
-        onActivated: viewport.fitPage()
+        onActivated: viewport.fitContent()
+    }
+
+    component Caption: Label {
+        color: theme.secondary
+        font.pixelSize: theme.small
+        wrapMode: Text.WordWrap
+    }
+    component SectionTitle: Label {
+        color: theme.ink
+        font.pixelSize: theme.heading
+        font.weight: Font.DemiBold
+    }
+    component Rule: Rectangle {
+        Layout.fillWidth: true
+        implicitHeight: 1
+        color: theme.line
+    }
+    component Separator: Rectangle {
+        implicitWidth: 1
+        implicitHeight: 18
+        color: theme.line
     }
 
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
         Rectangle {
+            objectName: "documentBar"
             Layout.fillWidth: true
-            implicitHeight: 76
-            color: "#ffffff"
+            implicitHeight: 48
+            color: theme.surface
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: 24
-                anchors.rightMargin: 24
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
                 spacing: 16
-                Rectangle {
-                    width: 38
-                    height: 38
-                    radius: 11
-                    color: "#087f70"
-                    Text {
-                        anchors.centerIn: parent
-                        text: "S"
-                        color: "white"
-                        font.pixelSize: 24
-                        font.bold: true
-                    }
+                Label {
+                    text: "SlideGuard"
+                    font.family: "Segoe UI"
+                    font.pixelSize: 15
+                    font.weight: Font.DemiBold
+                    color: theme.ink
                 }
-                ColumnLayout {
-                    spacing: 2
-                    Text {
-                        text: "SlideGuard Studio"
-                        font.pixelSize: 19
-                        font.bold: true
-                        color: "#203345"
-                    }
-                    Text {
-                        text: "裁剪清楚，再交付"
-                        font.pixelSize: 11
-                        color: "#758493"
-                    }
+                Separator {}
+                Glyph {
+                    name: "document"
+                    ink: theme.secondary
                 }
-                Rectangle {
-                    width: 1
-                    height: 30
-                    color: "#e0e6eb"
-                }
-                Text {
+                Label {
                     Layout.fillWidth: true
                     text: doc.filename
                     elide: Text.ElideMiddle
-                    color: "#4b5d6f"
+                    color: theme.ink
+                    ToolTip.visible: fileHover.hovered
+                    ToolTip.text: doc.source
+                    HoverHandler {
+                        id: fileHover
+                    }
+                }
+                Caption {
+                    text: "PPTX"
+                    visible: doc.source !== ""
                 }
                 ActionButton {
-                    text: "打开 PPTX"
+                    glyph: "folder"
+                    text: "打开"
+                    hint: "打开 PowerPoint · Ctrl+O"
                     enabled: !doc.busy
                     onClicked: studio.chooseFile()
                 }
-                Label {
-                    text: "本地处理 · 开发预览"
-                    color: "#71818f"
-                    font.pixelSize: 11
-                }
             }
         }
-        Rectangle {
-            Layout.fillWidth: true
-            height: 1
-            color: "#e0e6eb"
-        }
+        Rule {}
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: 0
             Rectangle {
-                Layout.preferredWidth: 112
+                objectName: "pageRail"
+                Layout.preferredWidth: window.width < 1150 ? 132 : 168
                 Layout.fillHeight: true
-                color: "#f8fafb"
+                color: theme.panel
                 ColumnLayout {
                     anchors.fill: parent
                     anchors.margins: 12
                     spacing: 12
-                    Text {
-                        text: "页面"
-                        color: "#738291"
-                        font.pixelSize: 12
+                    RowLayout {
+                        Layout.fillWidth: true
+                        SectionTitle {
+                            text: "页面"
+                            Layout.fillWidth: true
+                        }
+                        Caption {
+                            text: doc.pages > 0 ? String(doc.pages) : ""
+                        }
                     }
                     ListView {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        clip: true
-                        spacing: 8
                         model: doc.pages
-                        delegate: ActionButton {
+                        clip: true
+                        spacing: 10
+                        delegate: Item {
+                            id: pageEntry
                             required property int index
-                            width: ListView.view.width
-                            height: 62
-                            text: "第 " + (index + 1) + " 页"
-                            selected: doc.page === index + 1
+                            activeFocusOnTab: true
                             enabled: !doc.busy
-                            onClicked: {
+                            Accessible.role: Accessible.Button
+                            Accessible.name: "第 " + (index + 1) + " 页"
+                            Accessible.onPressAction: openPage()
+                            function openPage() {
                                 studio.selectPage(index + 1);
-                                viewport.fitPage();
+                                viewport.fitContent();
+                            }
+                            Keys.onReturnPressed: openPage()
+                            Keys.onSpacePressed: openPage()
+                            width: ListView.view.width
+                            height: width * 0.5625 + 32
+                            Rectangle {
+                                id: thumbnail
+                                width: parent.width
+                                height: parent.width * 0.5625
+                                color: theme.surface
+                                radius: 2
+                                border.width: doc.page === index + 1 || pageEntry.activeFocus ? 2 : 1
+                                border.color: doc.page === index + 1 || pageEntry.activeFocus ? theme.accent : theme.line
+                                Image {
+                                    objectName: "pageThumbnail"
+                                    anchors.fill: parent
+                                    anchors.margins: 4
+                                    source: doc.page === index + 1 ? doc.sourcePreviewUrl : ""
+                                    sourceSize.width: 280
+                                    fillMode: Image.PreserveAspectFit
+                                    asynchronous: true
+                                }
+                                Caption {
+                                    anchors.centerIn: parent
+                                    visible: doc.page !== index + 1
+                                    text: "点击预览"
+                                }
+                            }
+                            Label {
+                                anchors.top: thumbnail.bottom
+                                anchors.topMargin: 7
+                                text: String(index + 1).padStart(2, "0")
+                                font.pixelSize: 11
+                                color: doc.page === index + 1 ? theme.accent : theme.secondary
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                enabled: !doc.busy
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    pageEntry.forceActiveFocus();
+                                    pageEntry.openPage();
+                                }
                             }
                         }
                     }
-                    Text {
+                    Caption {
                         Layout.fillWidth: true
-                        text: "当前切片：单页导出"
-                        wrapMode: Text.WordWrap
-                        color: "#8995a1"
-                        font.pixelSize: 11
+                        text: "单页导出\n原稿不会被改写"
                     }
                 }
+            }
+            Rectangle {
+                Layout.fillHeight: true
+                implicitWidth: 1
+                color: theme.line
             }
             ColumnLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 spacing: 0
                 Rectangle {
+                    objectName: "canvasToolbar"
                     Layout.fillWidth: true
-                    implicitHeight: 62
-                    color: "#f8fafb"
+                    implicitHeight: 44
+                    color: theme.surface
                     RowLayout {
                         anchors.fill: parent
-                        anchors.margins: 12
-                        spacing: 6
+                        anchors.leftMargin: 8
+                        anchors.rightMargin: 8
+                        spacing: 4
                         ActionButton {
-                            text: "裁剪"
+                            glyph: "crop"
+                            text: window.width >= 1200 ? "裁剪" : ""
+                            hint: "拖动边界裁剪"
+                            quiet: true
                             selected: !viewport.handTool
+                            enabled: window.editing
                             onClicked: viewport.handTool = false
                         }
                         ActionButton {
-                            text: "平移"
+                            glyph: "hand"
+                            hint: "平移 · 按住空格也可拖动"
+                            quiet: true
                             selected: viewport.handTool
                             onClicked: viewport.handTool = true
+                        }
+                        Separator {}
+                        ActionButton {
+                            glyph: "undo"
+                            hint: "撤销 · Ctrl+Z"
+                            quiet: true
+                            enabled: window.editing && doc.canUndo
+                            onClicked: studio.undo(false)
+                        }
+                        ActionButton {
+                            glyph: "redo"
+                            hint: "重做 · Ctrl+Shift+Z"
+                            quiet: true
+                            enabled: window.editing && doc.canRedo
+                            onClicked: studio.undo(true)
                         }
                         Item {
                             Layout.fillWidth: true
                         }
                         ActionButton {
-                            text: "−"
+                            glyph: "minus"
+                            hint: "缩小"
+                            quiet: true
                             onClicked: viewport.zoomAt(viewport.zoom / 1.25, viewport.width / 2, viewport.height / 2)
                         }
                         Label {
                             text: Math.round(viewport.zoom * viewport.fit * 100) + "%"
-                            Layout.preferredWidth: 45
                             horizontalAlignment: Text.AlignHCenter
-                            color: "#4b5d6f"
+                            Layout.preferredWidth: 42
+                            color: theme.secondary
                         }
                         ActionButton {
-                            text: "+"
+                            glyph: "plus"
+                            hint: "放大 · 滚轮以鼠标为中心"
+                            quiet: true
                             onClicked: viewport.zoomAt(viewport.zoom * 1.25, viewport.width / 2, viewport.height / 2)
                         }
+                        Separator {}
                         ActionButton {
-                            text: "适配"
-                            onClicked: viewport.fitPage()
+                            glyph: "fit"
+                            hint: "适合选区 · Ctrl+0"
+                            quiet: true
+                            onClicked: viewport.fitContent()
                         }
                         ActionButton {
                             text: "1:1"
+                            hint: "参考图实际像素"
+                            quiet: true
                             onClicked: viewport.actualPixels()
                         }
                     }
                 }
+                Rule {}
                 CropViewport {
                     id: viewport
                     objectName: "cropViewport"
@@ -209,204 +304,176 @@ ApplicationWindow {
                 }
                 Rectangle {
                     Layout.fillWidth: true
-                    implicitHeight: 54
-                    color: "#f8fafb"
+                    implicitHeight: 44
+                    color: theme.surface
                     RowLayout {
                         anchors.fill: parent
-                        anchors.margins: 9
-                        spacing: 6
-                        ActionButton {
-                            text: "源参考"
-                            selected: doc.viewKind === "source"
-                            enabled: !doc.busy && doc.ready
-                            onClicked: {
-                                studio.showView("source");
-                                viewport.fitPage();
-                            }
-                        }
-                        ActionButton {
-                            text: "交付 PDF"
-                            selected: doc.viewKind === "pdf"
-                            enabled: !doc.busy && doc.hasResult
-                            onClicked: {
-                                studio.showView("pdf");
-                                viewport.fitPage();
-                            }
-                        }
-                        ActionButton {
-                            text: "透明结果"
-                            selected: doc.viewKind === "alpha"
-                            enabled: !doc.busy && doc.hasResult
-                            onClicked: {
-                                studio.showView("alpha");
-                                viewport.fitPage();
+                        anchors.leftMargin: 8
+                        anchors.rightMargin: 8
+                        spacing: 2
+                        Repeater {
+                            model: [
+                                {
+                                    key: "source",
+                                    label: "源图"
+                                },
+                                {
+                                    key: "pdf",
+                                    label: "PDF"
+                                },
+                                {
+                                    key: "alpha",
+                                    label: "透明 PNG"
+                                }
+                            ]
+                            ActionButton {
+                                required property var modelData
+                                text: modelData.label
+                                quiet: true
+                                selected: doc.viewKind === modelData.key
+                                enabled: !doc.busy && (modelData.key === "source" ? doc.ready : doc.hasResult)
+                                onClicked: {
+                                    studio.showView(modelData.key);
+                                    viewport.fitContent();
+                                }
                             }
                         }
                         Item {
                             Layout.fillWidth: true
                         }
-                        ComboBox {
-                            implicitWidth: 96
-                            model: ["棋盘格", "白底", "深色底"]
+                        Choice {
+                            implicitWidth: 94
+                            model: ["棋盘格", "白色", "深色"]
+                            enabled: doc.viewKind === "alpha"
+                            Accessible.name: "透明图预览底色"
                             onActivated: viewport.backdrop = ["checker", "white", "dark"][currentIndex]
-                            Accessible.name: "预览背景"
                         }
                     }
                 }
             }
             Rectangle {
-                Layout.preferredWidth: 310
                 Layout.fillHeight: true
-                color: "white"
+                implicitWidth: 1
+                color: theme.line
+            }
+            Rectangle {
+                id: inspector
+                objectName: "inspector"
+                Layout.preferredWidth: 288
+                Layout.fillHeight: true
+                color: theme.surface
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: 20
-                    spacing: 12
+                    spacing: 0
+                    Rectangle {
+                        Layout.fillWidth: true
+                        implicitHeight: 44
+                        color: theme.surface
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 16
+                            anchors.rightMargin: 16
+                            SectionTitle {
+                                text: "导出设置"
+                                Layout.fillWidth: true
+                            }
+                            Caption {
+                                text: doc.ready ? "第 " + doc.page + " 页" : ""
+                            }
+                        }
+                    }
+                    Rule {}
                     ScrollView {
+                        id: properties
+                        objectName: "propertyScroll"
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         clip: true
                         contentWidth: availableWidth
                         ColumnLayout {
-                            width: parent.width
-                            spacing: 14
-                            Label {
-                                text: "01  调整边界"
-                                font.pixelSize: 16
-                                font.bold: true
-                                color: "#25384b"
-                            }
-                            RowLayout {
+                            width: properties.availableWidth
+                            spacing: 0
+                            ColumnLayout {
                                 Layout.fillWidth: true
-                                spacing: 5
-                                ActionButton {
-                                    text: "自动紧边"
-                                    selected: doc.mode === "auto"
-                                    enabled: !doc.busy && doc.ready && doc.viewKind === "source"
-                                    onClicked: studio.setMode("auto")
-                                }
-                                ActionButton {
-                                    text: "整页"
-                                    enabled: !doc.busy && doc.ready && doc.viewKind === "source"
-                                    onClicked: studio.setMode("full")
-                                }
-                                ActionButton {
-                                    text: "手动"
-                                    selected: doc.mode === "manual"
-                                    enabled: !doc.busy && doc.ready && doc.viewKind === "source"
-                                    onClicked: studio.setMode("manual")
-                                }
-                            }
-                            Label {
-                                Layout.fillWidth: true
-                                text: "拖动紫色手柄调整裁剪。绿色外框就是扩边后的输出范围。"
-                                wrapMode: Text.WordWrap
-                                color: "#728191"
-                                font.pixelSize: 12
-                            }
-                            RowLayout {
-                                Label {
-                                    text: "边距扩展"
-                                    color: "#34485c"
+                                Layout.margins: 16
+                                spacing: 12
+                                RowLayout {
                                     Layout.fillWidth: true
-                                }
-                                Switch {
-                                    text: "四边联动"
-                                    checked: window.linked
-                                    onToggled: {
-                                        window.linked = checked;
-                                        if (checked)
-                                            studio.setMargin(-1, doc.margins[0]);
-                                    }
-                                    enabled: !doc.busy && doc.viewKind === "source"
-                                }
-                            }
-                            RowLayout {
-                                spacing: 6
-                                Repeater {
-                                    model: [0, 1, 2, 5]
-                                    ActionButton {
-                                        required property int modelData
-                                        text: modelData + "%"
-                                        selected: doc.margins.every(v => Math.abs(v - modelData) < 0.001)
-                                        enabled: !doc.busy && doc.ready && doc.viewKind === "source"
-                                        onClicked: studio.setMargin(-1, modelData)
-                                    }
-                                }
-                            }
-                            Repeater {
-                                model: window.linked ? 1 : 4
-                                ColumnLayout {
-                                    required property int index
-                                    Layout.fillWidth: true
-                                    spacing: 0
-                                    Label {
-                                        text: (window.linked ? "全部" : ["左边", "上边", "右边", "下边"][index]) + "  " + doc.margins[index].toFixed(1) + "%"
-                                        color: "#617486"
-                                        font.pixelSize: 12
-                                    }
-                                    Slider {
+                                    SectionTitle {
+                                        text: "裁剪范围"
                                         Layout.fillWidth: true
-                                        from: 0
-                                        to: 20
-                                        stepSize: 0.1
-                                        value: doc.margins[index]
-                                        enabled: !doc.busy && doc.ready && doc.viewKind === "source"
-                                        Accessible.name: window.linked ? "四边扩展百分比" : ["左边扩展", "上边扩展", "右边扩展", "下边扩展"][index]
-                                        onPressedChanged: {
-                                            if (pressed)
-                                                studio.beginEdit();
-                                            else
-                                                studio.endEdit(false);
-                                        }
-                                        onMoved: studio.setMargin(window.linked ? -1 : index, value)
+                                    }
+                                    Caption {
+                                        text: doc.mode === "auto" ? "自动" : "手动"
                                     }
                                 }
-                            }
-                            Label {
-                                text: doc.cropSize
-                                color: "#087f70"
-                                font.pixelSize: 12
-                            }
-                            Label {
-                                Layout.fillWidth: true
-                                text: "按选区宽高计算扩展；到幻灯片边缘会停止。"
-                                wrapMode: Text.WordWrap
-                                font.pixelSize: 11
-                                color: "#7b8894"
-                            }
-                            RowLayout {
-                                ActionButton {
-                                    text: "撤销"
-                                    enabled: doc.canUndo && !doc.busy && doc.viewKind === "source"
-                                    onClicked: studio.undo(false)
+                                RowLayout {
+                                    spacing: 4
+                                    Layout.fillWidth: true
+                                    ActionButton {
+                                        Layout.fillWidth: true
+                                        text: "自动紧边"
+                                        selected: doc.mode === "auto"
+                                        enabled: window.editing
+                                        onClicked: studio.setMode("auto")
+                                    }
+                                    ActionButton {
+                                        Layout.fillWidth: true
+                                        text: "整页"
+                                        enabled: window.editing
+                                        onClicked: studio.setMode("full")
+                                    }
+                                    ActionButton {
+                                        Layout.fillWidth: true
+                                        text: "手动"
+                                        selected: doc.mode === "manual"
+                                        enabled: window.editing
+                                        onClicked: studio.setMode("manual")
+                                    }
+                                }
+                                Caption {
+                                    Layout.fillWidth: true
+                                    text: "拖动蓝色边框调整选区，绿色外框为最终输出范围。"
                                 }
                                 ActionButton {
-                                    text: "重做"
-                                    enabled: doc.canRedo && !doc.busy && doc.viewKind === "source"
-                                    onClicked: studio.undo(true)
+                                    id: exact
+                                    text: selected ? "收起精确坐标" : "精确坐标"
+                                    glyph: "crop"
+                                    quiet: true
+                                    onClicked: selected = !selected
                                 }
-                            }
-                            CheckBox {
-                                id: exact
-                                text: "精确坐标（可选）"
-                            }
-                            GridLayout {
-                                visible: exact.checked
-                                columns: 2
-                                Layout.fillWidth: true
-                                Repeater {
-                                    model: 4
-                                    ColumnLayout {
-                                        required property int index
-                                        Label {
-                                            text: ["左 %", "上 %", "右 %", "下 %"][index]
-                                            font.pixelSize: 11
-                                        }
+                                GridLayout {
+                                    visible: exact.selected
+                                    columns: 2
+                                    columnSpacing: 8
+                                    rowSpacing: 8
+                                    Layout.fillWidth: true
+                                    Repeater {
+                                        model: 4
                                         TextField {
-                                            Layout.preferredWidth: 110
+                                            required property int index
+                                            Layout.fillWidth: true
+                                            Layout.preferredWidth: 100
+                                            implicitHeight: 32
+                                            leftPadding: 36
+                                            rightPadding: 6
                                             text: (doc.base[index] * 100).toFixed(3)
-                                            enabled: !doc.busy && doc.ready && doc.viewKind === "source"
+                                            font.pixelSize: theme.body
+                                            color: theme.ink
+                                            enabled: window.editing
+                                            Accessible.name: ["左边界百分比", "上边界百分比", "右边界百分比", "下边界百分比"][index]
+                                            Label {
+                                                anchors.left: parent.left
+                                                anchors.leftMargin: 8
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                text: ["左", "上", "右", "下"][index]
+                                                color: theme.secondary
+                                            }
+                                            background: Rectangle {
+                                                color: theme.panel
+                                                radius: theme.radius
+                                                border.color: parent.activeFocus ? theme.accent : theme.line
+                                            }
                                             validator: DoubleValidator {
                                                 bottom: 0
                                                 top: 100
@@ -421,133 +488,230 @@ ApplicationWindow {
                                     }
                                 }
                             }
-                            Rectangle {
+                            Rule {}
+                            ColumnLayout {
                                 Layout.fillWidth: true
-                                height: 1
-                                color: "#e7edf1"
-                            }
-                            Label {
-                                text: "02  输出与验证"
-                                font.pixelSize: 16
-                                font.bold: true
-                                color: "#25384b"
-                            }
-                            RowLayout {
-                                Label {
-                                    text: "紧凑版上限"
+                                Layout.margins: 16
+                                spacing: 10
+                                RowLayout {
                                     Layout.fillWidth: true
-                                    color: "#617486"
+                                    SectionTitle {
+                                        text: "边缘留白"
+                                        Layout.fillWidth: true
+                                    }
+                                    ActionButton {
+                                        glyph: "link"
+                                        text: window.linked ? "联动" : "独立"
+                                        quiet: true
+                                        selected: window.linked
+                                        enabled: window.editing
+                                        hint: "四边使用同一百分比，或分别调整"
+                                        onClicked: {
+                                            window.linked = !window.linked;
+                                            if (window.linked)
+                                                studio.setMargin(-1, doc.margins[0]);
+                                        }
+                                    }
                                 }
-                                ComboBox {
-                                    model: ["1 MB", "2.5 MB", "5 MB", "10 MB"]
-                                    currentIndex: [1, 2.5, 5, 10].indexOf(doc.limit)
-                                    implicitWidth: 106
-                                    enabled: !doc.busy && doc.ready && doc.viewKind === "source"
-                                    onActivated: studio.setBudget([1, 2.5, 5, 10][currentIndex])
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+                                    Repeater {
+                                        model: [0, 1, 2, 5]
+                                        ActionButton {
+                                            required property int modelData
+                                            Layout.fillWidth: true
+                                            objectName: "marginPreset" + modelData
+                                            text: modelData + "%"
+                                            selected: doc.margins.every(v => Math.abs(v - modelData) < 0.001)
+                                            enabled: window.editing
+                                            onClicked: studio.setMargin(-1, modelData)
+                                        }
+                                    }
+                                }
+                                Repeater {
+                                    model: window.linked ? 1 : 4
+                                    RowLayout {
+                                        required property int index
+                                        Layout.fillWidth: true
+                                        spacing: 8
+                                        Caption {
+                                            text: window.linked ? "四边" : ["左", "上", "右", "下"][index]
+                                        }
+                                        ValueSlider {
+                                            Layout.fillWidth: true
+                                            value: doc.margins[index]
+                                            enabled: window.editing
+                                            Accessible.name: window.linked ? "四边扩展百分比" : ["左边扩展", "上边扩展", "右边扩展", "下边扩展"][index]
+                                            onPressedChanged: {
+                                                if (pressed)
+                                                    studio.beginEdit();
+                                                else
+                                                    studio.endEdit(false);
+                                            }
+                                            onMoved: studio.setMargin(window.linked ? -1 : index, value)
+                                        }
+                                        Label {
+                                            text: doc.margins[index].toFixed(1) + "%"
+                                            Layout.preferredWidth: 40
+                                            horizontalAlignment: Text.AlignRight
+                                            color: theme.ink
+                                            font.pixelSize: theme.small
+                                        }
+                                    }
+                                }
+                                Caption {
+                                    Layout.fillWidth: true
+                                    text: "按选区宽高计算，最多扩展到幻灯片边缘。"
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: doc.cropSize
+                                    color: theme.output
+                                    font.pixelSize: theme.small
                                 }
                             }
-                            Label {
+                            Rule {}
+                            ColumnLayout {
                                 Layout.fillWidth: true
-                                text: "完整SVG另行保留。紧凑PDF/SVG可能缩小并有损压缩图片，不是把位图变矢量。"
-                                wrapMode: Text.WordWrap
-                                font.pixelSize: 11
-                                color: "#7b8894"
-                            }
-                            ActionButton {
-                                Layout.fillWidth: true
-                                text: "选择输出文件夹"
-                                enabled: !doc.busy
-                                onClicked: studio.chooseOutput()
-                            }
-                            Label {
-                                Layout.fillWidth: true
-                                text: doc.output
-                                elide: Text.ElideMiddle
-                                font.pixelSize: 11
-                                color: "#7b8894"
-                                ToolTip.visible: pathHover.hovered
-                                ToolTip.text: doc.output
-                                HoverHandler {
-                                    id: pathHover
+                                Layout.margins: 16
+                                spacing: 12
+                                SectionTitle {
+                                    text: "输出文件"
                                 }
-                            }
-                            Label {
-                                Layout.fillWidth: true
-                                text: doc.resultSummary
-                                wrapMode: Text.WordWrap
-                                color: "#455d70"
-                                font.pixelSize: 12
-                            }
-                            RowLayout {
-                                visible: doc.hasResult
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Label {
+                                        text: "紧凑版上限"
+                                        color: theme.secondary
+                                        Layout.fillWidth: true
+                                    }
+                                    Choice {
+                                        model: ["1 MB", "2.5 MB", "5 MB", "10 MB"]
+                                        currentIndex: [1, 2.5, 5, 10].indexOf(doc.limit)
+                                        enabled: window.editing
+                                        Accessible.name: "紧凑版大小上限"
+                                        onActivated: studio.setBudget([1, 2.5, 5, 10][currentIndex])
+                                    }
+                                }
+                                Caption {
+                                    Layout.fillWidth: true
+                                    text: "保留完整 SVG，同时生成紧凑 PDF / SVG 和透明 PNG。紧凑版可能压缩位图。"
+                                }
                                 ActionButton {
-                                    text: "复核产物"
+                                    Layout.fillWidth: true
+                                    glyph: "folder"
+                                    text: "保存位置"
                                     enabled: !doc.busy
-                                    onClicked: studio.verifyResult()
+                                    onClicked: studio.chooseOutput()
                                 }
-                                ActionButton {
-                                    text: "验收报告"
-                                    onClicked: studio.openResult("report")
+                                Caption {
+                                    Layout.fillWidth: true
+                                    text: doc.output
+                                    elide: Text.ElideMiddle
+                                    wrapMode: Text.NoWrap
+                                    ToolTip.visible: pathHover.hovered
+                                    ToolTip.text: doc.output
+                                    HoverHandler {
+                                        id: pathHover
+                                    }
                                 }
                             }
-                            ActionButton {
-                                Layout.fillWidth: true
+                            Rule {
                                 visible: doc.hasResult
-                                text: "打开结果文件夹"
-                                onClicked: studio.openResult("folder")
+                            }
+                            ColumnLayout {
+                                visible: doc.hasResult
+                                Layout.fillWidth: true
+                                Layout.margins: 16
+                                spacing: 8
+                                SectionTitle {
+                                    text: "上次导出"
+                                }
+                                Caption {
+                                    Layout.fillWidth: true
+                                    text: doc.resultSummary
+                                }
+                                RowLayout {
+                                    ActionButton {
+                                        text: "验收报告"
+                                        onClicked: studio.openResult("report")
+                                    }
+                                    ActionButton {
+                                        text: "复核文件"
+                                        enabled: !doc.busy
+                                        onClicked: studio.verifyResult()
+                                    }
+                                }
+                                ActionButton {
+                                    Layout.fillWidth: true
+                                    glyph: "folder"
+                                    text: "查看输出"
+                                    onClicked: studio.openResult("folder")
+                                }
                             }
                         }
                     }
-                    ActionButton {
+                    Rule {}
+                    ColumnLayout {
+                        objectName: "exportDock"
                         Layout.fillWidth: true
-                        text: "检查当前参数"
-                        enabled: !doc.busy && doc.ready
-                        onClicked: studio.export(true)
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: doc.checkStatus
-                        wrapMode: Text.WordWrap
-                        color: "#6c7f8e"
-                        font.pixelSize: 11
-                    }
-                    ActionButton {
-                        Layout.fillWidth: true
-                        implicitHeight: 48
-                        primary: true
-                        text: doc.operation === "export" ? "安全取消导出" : "导出当前页并自动验收"
-                        enabled: doc.operation === "export" || (!doc.busy && doc.ready)
-                        onClicked: doc.operation === "export" ? studio.cancel() : studio.export(false)
+                        Layout.margins: 16
+                        spacing: 8
+                        Caption {
+                            Layout.fillWidth: true
+                            text: doc.checkStatus
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            ActionButton {
+                                objectName: "checkButton"
+                                text: "检查"
+                                glyph: "check"
+                                hint: "仅检查参数，不生成文件"
+                                enabled: !doc.busy && doc.ready
+                                onClicked: studio.export(true)
+                            }
+                            ActionButton {
+                                objectName: "exportButton"
+                                Layout.fillWidth: true
+                                primary: true
+                                glyph: "export"
+                                text: doc.operation === "export" ? "取消导出" : "导出并验收"
+                                enabled: doc.operation === "export" || (!doc.busy && doc.ready)
+                                onClicked: doc.operation === "export" ? studio.cancel() : studio.export(false)
+                            }
+                        }
                     }
                 }
             }
         }
+        Rule {}
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: 42
-            color: "#ffffff"
+            implicitHeight: 28
+            color: theme.panel
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: 20
-                anchors.rightMargin: 20
-                spacing: 10
+                anchors.leftMargin: 12
+                anchors.rightMargin: 12
+                spacing: 8
                 BusyIndicator {
                     running: doc.busy
                     visible: doc.busy
-                    implicitWidth: 24
-                    implicitHeight: 24
+                    implicitWidth: 20
+                    implicitHeight: 20
                 }
-                Text {
+                Label {
                     Layout.fillWidth: true
                     text: doc.status
                     elide: Text.ElideRight
-                    color: "#52697b"
-                    font.pixelSize: 12
+                    font.pixelSize: theme.small
+                    color: theme.secondary
                 }
-                Text {
-                    text: doc.busy ? "已运行 " + doc.elapsed + " 秒" : "本地执行 · 不上传稿件"
-                    color: "#8995a1"
-                    font.pixelSize: 11
+                Caption {
+                    text: doc.busy ? doc.elapsed + " 秒" : "本地处理"
                 }
             }
         }

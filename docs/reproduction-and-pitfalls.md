@@ -260,3 +260,34 @@ changed. A Windows test writes, reads and discards a draft beyond 260 characters
 The round-trip assertion compares canonical draft documents: serialization has always
 added the active page to pageCrops, so raw dataclass equality was the wrong assertion
 for an input with an empty page_crops tuple. Track the fix in KEY-253.
+
+## 31. A functional GUI is not a reviewed visual design
+
+The user rejected the first Studio interface: oversized branding and slogans,
+page-number cards without images, inconsistent default controls, and weak hierarchy.
+KEY-255 tracks the redesign under KEY-246; KEY-256/257/258 separate components,
+workspace and review, with concrete defects below them. Keep the existing export
+engine unchanged. Use the shared QML theme and controls, then inspect real content
+and minimum-window layouts. Record visual review separately from test totals.
+
+## 32. A ready preview must retire its loading message
+
+Real-window inspection found that check_status still said it was waiting for a
+reference after the source image had loaded. Reset it to unvalidated on preview
+success. Do not mark it as validated. Full-slide fitting also wasted most of the
+viewport on cropped-out margins. fitContent centers the effective output bounds
+by changing camera state only; tests assert document state stays unchanged. KEY-259.
+
+## 33. Asynchronous Python image providers need the GIL during tests
+
+The expanded offscreen QML matrix hung after several cases when QTest.qWait was
+followed by engine teardown. Replacing that wait with short processEvents and
+time.sleep iterations lets the Python-backed image-provider thread run before
+teardown. The 8-case matrix then passed. This was a test-wait failure, not evidence
+that the user had stopped the task. Keep a faulthandler timeout on regression runs.
+
+During this edit, apply_patch rejected a delete/add pair targeting the same file,
+and later rejected an incorrect Markdown context. Both failed without applying
+the batch; retry with an update hunk and exact context. PowerShell did not expand
+the QML wildcard for qmlformat; enumerate QML files and format each explicitly.
+A semicolon between QML child objects was caught by component loading and removed.

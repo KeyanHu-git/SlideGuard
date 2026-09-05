@@ -1,26 +1,49 @@
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQuick.Layouts
 
 Button {
     id: control
+    Theme {
+        id: theme
+    }
     property bool primary: false
     property bool selected: false
-    implicitHeight: 38
-    leftPadding: 14
-    rightPadding: 14
-    font.pixelSize: 13
-    Accessible.name: text
-    contentItem: Text {
-        text: control.text
-        font: control.font
-        color: !control.enabled ? "#9ba4ad" : control.primary ? "white" : "#253446"
-        horizontalAlignment: Text.AlignHCenter
-        verticalAlignment: Text.AlignVCenter
+    property bool quiet: false
+    property string glyph: ""
+    property string hint: ""
+    implicitHeight: theme.controlHeight
+    implicitWidth: Math.max(32, contentItem.implicitWidth + leftPadding + rightPadding)
+    leftPadding: 10
+    rightPadding: 10
+    font.pixelSize: theme.body
+    hoverEnabled: true
+    Accessible.name: text || hint
+    ToolTip.visible: hovered && hint !== ""
+    ToolTip.delay: 600
+    ToolTip.text: hint
+    readonly property color foreground: !enabled ? theme.disabled : primary ? "white" : selected ? theme.accent : theme.ink
+    contentItem: RowLayout {
+        spacing: 6
+        Glyph {
+            visible: control.glyph !== ""
+            name: control.glyph
+            ink: control.foreground
+        }
+        Text {
+            visible: control.text !== ""
+            text: control.text
+            font: control.font
+            color: control.foreground
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            Layout.fillWidth: true
+        }
     }
     background: Rectangle {
-        radius: 8
-        color: !control.enabled ? "#edf0f3" : control.primary ? (control.down ? "#075e54" : "#087f70") : control.selected ? "#dcefe9" : control.hovered ? "#edf2f5" : "#ffffff"
-        border.color: control.activeFocus ? "#087f70" : control.selected ? "#87baad" : "#dce2e7"
+        radius: theme.radius
+        color: !control.enabled ? (control.quiet ? "transparent" : theme.panel) : control.primary ? (control.hovered || control.down ? theme.accentHover : theme.accent) : control.selected ? theme.selection : control.hovered || control.down ? theme.hover : control.quiet ? "transparent" : theme.surface
+        border.color: control.activeFocus ? theme.accent : control.quiet || control.primary ? "transparent" : control.selected ? "#bac9f3" : theme.line
         border.width: control.activeFocus ? 2 : 1
     }
 }

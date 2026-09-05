@@ -3,6 +3,9 @@ import QtQuick.Controls.Basic
 
 Rectangle {
     id: viewport
+    Theme {
+        id: theme
+    }
     required property var controller
     property var doc: controller.state
     property real zoom: 1
@@ -13,9 +16,10 @@ Rectangle {
     property string backdrop: "checker"
     property real fit: Math.min(Math.max(1, width - 80) / doc.imageWidth, Math.max(1, height - 80) / doc.imageHeight)
     property int renderWidth: 1600
+    property string fittedUrl: ""
     property bool editable: doc.ready && !doc.busy && doc.viewKind === "source"
     property bool panning: handTool || spaceHeld
-    color: "#e8edf0"
+    color: theme.canvas
     clip: true
     focus: true
     Accessible.name: "预览画布：滚轮缩放，空格拖动平移，拖动蓝色手柄裁剪"
@@ -24,6 +28,17 @@ Rectangle {
         zoom = 1;
         panX = 0;
         panY = 0;
+    }
+    function fitContent() {
+        if (!doc.ready || doc.viewKind !== "source") {
+            fitPage();
+            return;
+        }
+        let w = (doc.effective[2] - doc.effective[0]) * doc.imageWidth;
+        let h = (doc.effective[3] - doc.effective[1]) * doc.imageHeight;
+        zoom = Math.max(0.15, Math.min(32, Math.min((width - 80) / Math.max(1, w), (height - 80) / Math.max(1, h)) / fit));
+        panX = (0.5 - (doc.effective[0] + doc.effective[2]) / 2) * doc.imageWidth * fit * zoom;
+        panY = (0.5 - (doc.effective[1] + doc.effective[3]) / 2) * doc.imageHeight * fit * zoom;
     }
     function actualPixels() {
         zoomAt(1 / fit, width / 2, height / 2);
@@ -42,6 +57,10 @@ Rectangle {
         target: viewport.controller
         function onChanged() {
             renderDelay.restart();
+            if (viewport.doc.ready && viewport.doc.previewUrl !== viewport.fittedUrl) {
+                viewport.fittedUrl = viewport.doc.previewUrl;
+                Qt.callLater(viewport.fitContent);
+            }
         }
     }
     Timer {
@@ -105,14 +124,14 @@ Rectangle {
         Rectangle {
             anchors.fill: parent
             color: "transparent"
-            border.color: "#c8d0d9"
+            border.color: theme.line
         }
         // Dim only outside the effective crop. The authoring image is untouched.
         Repeater {
             model: doc.viewKind === "source" ? 4 : 0
             Rectangle {
                 required property int index
-                color: "#69232f40"
+                color: theme.cropMask
                 x: index === 3 ? doc.effective[2] * page.width : 0
                 y: index === 0 ? 0 : index === 1 ? doc.effective[3] * page.height : doc.effective[1] * page.height
                 width: index < 2 ? page.width : index === 2 ? doc.effective[0] * page.width : (1 - doc.effective[2]) * page.width
@@ -127,7 +146,7 @@ Rectangle {
             height: (doc.effective[3] - doc.effective[1]) * page.height
             color: "transparent"
             border.width: 2
-            border.color: "#049875"
+            border.color: theme.output
         }
         Rectangle {
             id: crop
@@ -137,8 +156,8 @@ Rectangle {
             width: (doc.base[2] - doc.base[0]) * page.width
             height: (doc.base[3] - doc.base[1]) * page.height
             color: "transparent"
-            border.color: "#6d5ae6"
-            border.width: 2
+            border.color: theme.accent
+            border.width: 1
             MouseArea {
                 anchors.fill: parent
                 enabled: viewport.editable && !viewport.panning
@@ -204,17 +223,17 @@ Rectangle {
                 ]
                 Rectangle {
                     required property var modelData
-                    width: 12
-                    height: 12
-                    radius: 3
+                    width: 8
+                    height: 8
+                    radius: 1
                     x: modelData.x * crop.width - width / 2
                     y: modelData.y * crop.height - height / 2
                     color: "white"
-                    border.color: "#6d5ae6"
-                    border.width: 2
+                    border.color: theme.accent
+                    border.width: 1
                     MouseArea {
                         anchors.fill: parent
-                        anchors.margins: -6
+                        anchors.margins: -8
                         enabled: viewport.editable && !viewport.panning
                         cursorShape: modelData.x === .5 ? Qt.SizeVerCursor : modelData.y === .5 ? Qt.SizeHorCursor : Qt.SizeFDiagCursor
                         onPressed: {
@@ -262,27 +281,36 @@ Rectangle {
         visible: !doc.ready
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: doc.busy ? "正在准备原生参考图" : "把注意力留给你的图"
-            font.pixelSize: 26
-            color: "#344556"
+            text: doc.busy ? "正在读取幻灯片" : "打开 PowerPoint 文件"
+            font.pixelSize: 20
+            color: theme.ink
         }
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: doc.busy ? "界面保持响应，排版交给 PowerPoint" : "打开 PPTX 后，拖动边界或滑动边距即可调整"
-            font.pixelSize: 14
-            color: "#6b7b89"
+            text: doc.busy ? "使用 PowerPoint 生成参考图" : "选择页面，调整边界，导出 PDF / SVG"
+            font.pixelSize: 12
+            color: theme.secondary
+        }
+        ActionButton {
+            anchors.horizontalCenter: parent.horizontalCenter
+            visible: !doc.busy
+            glyph: "folder"
+            text: "选择 PPTX"
+            onClicked: controller.chooseFile()
         }
     }
     Label {
         anchors.left: parent.left
         anchors.bottom: parent.bottom
         anchors.margins: 14
-        padding: 9
-        text: doc.viewKind === "source" ? "原生白底参考 · 不代表最终透明背景" : doc.viewKind === "pdf" ? "Qt PDF 按需重渲染 · 单纹理上限4096px" : "最终PNG的真实Alpha · 棋盘格不是图像内容"
-        color: "#526376"
+        padding: 6
+        visible: doc.ready
+        font.pixelSize: theme.small
+        text: doc.viewKind === "source" ? "源图白底参考 · 拖动裁剪 / 空格平移" : doc.viewKind === "pdf" ? "PDF 预览 · 显示上限 4096 px" : "透明 PNG · 棋盘格不写入文件"
+        color: theme.secondary
         background: Rectangle {
             color: "#eaffffff"
-            radius: 6
+            radius: 3
         }
     }
 }

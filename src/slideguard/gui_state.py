@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .geometry import NormalizedRect, validate_expansion_percent
+from .util import native_long_path
 
 
 DRAFT_SCHEMA_VERSION = 2
@@ -421,7 +422,7 @@ class GuiDraftStore:
         return self.root / f"{source_sha256}.json"
 
     def load(self, source_sha256: str) -> GuiDraft | None:
-        path = self.path_for(source_sha256)
+        path = Path(native_long_path(self.path_for(source_sha256)))
         if not path.is_file():
             return None
         try:
@@ -436,16 +437,17 @@ class GuiDraftStore:
         return draft if draft.source_sha256 == source_sha256 else None
 
     def save(self, draft: GuiDraft) -> Path:
-        self.root.mkdir(parents=True, exist_ok=True)
+        root = Path(native_long_path(self.root))
+        root.mkdir(parents=True, exist_ok=True)
         path = self.path_for(draft.source_sha256)
-        temporary = self.root / f".{draft.source_sha256}.{uuid.uuid4().hex}.tmp"
+        temporary = root / f".{draft.source_sha256}.{uuid.uuid4().hex}.tmp"
         data = json.dumps(draft.to_document(), ensure_ascii=False, indent=2, allow_nan=False)
         try:
             temporary.write_text(data, encoding="utf-8")
-            os.replace(temporary, path)
+            os.replace(temporary, native_long_path(path))
         finally:
             temporary.unlink(missing_ok=True)
         return path
 
     def discard(self, source_sha256: str) -> None:
-        self.path_for(source_sha256).unlink(missing_ok=True)
+        Path(native_long_path(self.path_for(source_sha256))).unlink(missing_ok=True)

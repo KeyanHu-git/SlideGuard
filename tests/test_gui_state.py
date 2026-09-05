@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 import pytest
 
 from slideguard.contracts import validate_document
 from slideguard.errors import InputError
+from slideguard.util import native_long_path
 from slideguard.gui_state import (
     BUILT_IN_CROP_PRESETS,
     CropPresetStore,
@@ -16,6 +19,23 @@ from slideguard.gui_state import (
     GuiDraftStore,
     PageCropAssignments,
 )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Win32 extended path regression")
+def test_draft_roundtrip_beyond_windows_max_path(tmp_path):
+    root = tmp_path / ("long-parent-" * 10) / ("nested-" * 10)
+    store = GuiDraftStore(root)
+    digest = "f" * 64
+    draft = GuiDraft(source_path="C:/paper/figure.pptx", source_sha256=digest, slide=1,
+                     editor=EditorState(BUILT_IN_CROP_PRESETS[0].crop, 2.5))
+    path = store.save(draft)
+    assert len(str(path)) > 260
+    assert Path(native_long_path(path)).is_file()
+    restored = store.load(digest)
+    assert restored is not None
+    assert restored.to_document() == draft.to_document()
+    store.discard(digest)
+    assert store.load(digest) is None
 
 
 def crop(left: float = 5.0, expand: float = 0.0, *, mode: str = "manual") -> CropSpec:

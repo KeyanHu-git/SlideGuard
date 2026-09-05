@@ -246,3 +246,17 @@ creation as test failures. Do not use an ever-growing Canvas bitmap for a checke
 at high zoom: tile a fixed 32px texture instead. Cap delivered-PDF image requests at
 4096px per edge and disclose that cap; arbitrary high-zoom detail needs a later tiled
 renderer, not a claim that stretching the current texture adds detail.
+
+## 30. A longer test root exposed the legacy GUI draft path limit
+
+The exact Studio commit was rerun under `studio-regression-final` instead of
+`studio-regression`. Four old draft tests then failed: the draft temporary filename
+combines a 64-character source hash and a UUID, crossing Win32 MAX_PATH under the
+longer root. The GUI caught OSError and left no saved draft.
+
+GuiDraftStore now uses the existing native_long_path helper for directory creation,
+reads, temporary writes, atomic replace and deletion. Public logical paths are not
+changed. A Windows test writes, reads and discards a draft beyond 260 characters.
+The round-trip assertion compares canonical draft documents: serialization has always
+added the active page to pageCrops, so raw dataclass equality was the wrong assertion
+for an input with an empty page_crops tuple. Track the fix in KEY-253.
